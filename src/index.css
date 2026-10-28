@@ -1,12 +1,51 @@
 :root {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #251d1e;
-  background: #f8f6f3;
+  color-scheme: dark;
+
+  --color-background: #101116;
+  --color-surface: #1d202a;
+  --color-primary: #e32235;
+  --color-text: #fafafc;
+  --color-muted: #a1a6b3;
+  --color-border: #343845;
+  --color-on-primary: #fff;
+  --color-primary-hover: #c91f31;
+
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-heading: clamp(1.375rem, 2.6vw, 1.75rem);
+  --text-display: clamp(3.5rem, 8vw, 6.75rem);
+  --leading-tight: 1.04;
+  --leading-body: 1.65;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+  --space-9: 6rem;
+
+  --radius-sm: 0.75rem;
+  --radius-card: 1.25rem;
+  --radius-pill: 999px;
+  --motion-fast: 150ms;
+  --motion-base: 220ms;
+  --motion-fizz: 2400ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-background);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  line-height: 1.6;
+  line-height: var(--leading-body);
 }
 
 * {
@@ -16,4 +55,36 @@
 body {
   min-width: 320px;
   margin: 0;
+  background-image: radial-gradient(
+    ellipse at 90% 8%,
+    rgb(227 34 53 / 7%),
+    transparent 36rem
+  );
+}
+
+html {
+  scroll-padding-top: var(--space-6);
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 0.25em;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-text);
+  outline-offset: 6px;
+}
+
+::selection {
+  color: var(--color-on-primary);
+  background: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-fizz: 0ms;
+  }
 }
