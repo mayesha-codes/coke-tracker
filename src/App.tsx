@@ -1,106 +1,92 @@
-import sipshiftMark from './assets/sipshift-mark.svg'
-import Brand from './components/Brand'
+import { useState } from 'react'
+import AppShell from './app/AppShell'
+import type { AppView } from './app/AppNavigation'
+import Icon from './components/ui/Icon'
+import type { IconName } from './components/ui/Icon'
+import DashboardPage from './features/dashboard/DashboardPage'
 import './App.css'
 
-const plannedFeatures = [
-  {
-    id: 'logging',
-    title: 'Log your drinks',
+type PlaceholderDetails = {
+  title: string
+  icon: IconName
+  introduction: string
+  description: string
+  planned: string[]
+}
+
+const placeholderDetails: Record<Exclude<AppView, 'home'>, PlaceholderDetails> = {
+  log: {
+    title: 'Log a drink',
+    icon: 'plus',
+    introduction: 'A little awareness starts with one entry.',
     description:
-      'Record each drink with its quantity, serving size, and date and time.',
+      'Your drink log is coming next. This will be your place to record a serving, its quantity, and when you had it.',
+    planned: ['Serving size and quantity', 'Date and time', 'Price per entry'],
   },
-  {
-    id: 'statistics',
-    title: 'Understand your habits',
+  history: {
+    title: 'History',
+    icon: 'history',
+    introduction: 'Your habits, with a little perspective.',
     description:
-      'Explore daily, weekly, and monthly totals for Coke, spending, sugar, and calories.',
+      'Once logging is available, your entries will live here. You will be able to browse your days and make corrections.',
+    planned: ['Entries grouped by day', 'Edit or remove a drink', 'Clear, readable history'],
   },
-  {
-    id: 'goals',
-    title: 'Follow your daily goal',
+  settings: {
+    title: 'Settings',
+    icon: 'settings',
+    introduction: 'A goal that fits your day.',
     description:
-      'Set a personal daily limit and see a reminder when you go beyond it.',
+      'Your personal preferences are coming next. You will be able to choose a daily limit and how your information is displayed.',
+    planned: ['Your display name', 'Daily goal preferences', 'Currency and reporting preferences'],
   },
-]
+}
 
 function App() {
+  const [activeView, setActiveView] = useState<AppView>('home')
+  const placeholder = activeView === 'home' ? null : placeholderDetails[activeView]
+
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#main-content">
-        Skip to main content
-      </a>
-
-      <header className="site-header">
-        <Brand />
-        <span className="status-badge">In development</span>
-      </header>
-
-      <main id="main-content" tabIndex={-1}>
-        <section className="hero" aria-labelledby="page-title">
-          <div className="hero__copy">
-            <p className="eyebrow hero__eyebrow">A little less. A little better.</p>
-            <h1 id="page-title">
-              Small sips.
-              <br />
-              <span>Big shifts.</span>
-            </h1>
-            <p className="hero-description">
-              Track your Coca-Cola consumption and build habits that work for you.
+    <AppShell
+      activeView={activeView}
+      onNavigate={setActiveView}
+      title={placeholder?.title ?? 'Home'}
+    >
+      {placeholder ? (
+        <section className="view-placeholder" aria-labelledby="view-heading">
+          <div className="view-placeholder__content">
+            <span className="view-placeholder__icon">
+              <Icon name={placeholder.icon} size={28} />
+            </span>
+            <p className="view-placeholder__eyebrow">Coming next</p>
+            <h1 id="view-heading">{placeholder.title}</h1>
+            <p className="view-placeholder__introduction">{placeholder.introduction}</p>
+            <p className="view-placeholder__description">{placeholder.description}</p>
+            <p className="view-placeholder__status">
+              <Icon name="sparkles" size={16} />
+              This feature is not implemented yet.
             </p>
-            <a className="primary-link" href="#features-title">
-              See what’s coming <span aria-hidden="true">↗</span>
-            </a>
+            <button
+              className="app-action"
+              type="button"
+              onClick={() => setActiveView('home')}
+            >
+              <Icon name="arrow-left" size={18} />
+              Back to Home
+            </button>
           </div>
-
-          <div className="hero-art" aria-hidden="true">
-            <span className="hero-art__ring" />
-            <span className="hero-art__ring hero-art__ring--inner" />
-            <div className="hero-art__disc">
-              <img src={sipshiftMark} alt="" width="160" height="160" />
-            </div>
-            <span className="fizz-bubble fizz-bubble--one" />
-            <span className="fizz-bubble fizz-bubble--two" />
-            <span className="fizz-bubble fizz-bubble--three" />
-            <span className="hero-art__caption">Room for a new rhythm.</span>
-          </div>
-        </section>
-
-        <section className="setup-panel" aria-labelledby="setup-title">
-          <span className="setup-panel__icon" aria-hidden="true">↗</span>
-          <div>
-            <p className="eyebrow">Welcome to SipShift</p>
-            <h2 id="setup-title">Your tracking journey starts here.</h2>
-            <p className="setup-panel__description">
-              The app is taking shape. Drink logging and your personal dashboard
-              are coming next.
-            </p>
+          <div className="view-placeholder__roadmap">
+            <p>On the roadmap</p>
+            <ul>
+              {placeholder.planned.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
           </div>
         </section>
-
-        <section className="planned-features" aria-labelledby="features-title">
-          <div className="section-heading">
-            <p className="eyebrow">A look ahead</p>
-            <h2 id="features-title">Planned features</h2>
-          </div>
-          <div className="feature-grid">
-            {plannedFeatures.map((feature, index) => (
-              <article className="feature-card" key={feature.id}>
-                <span className="feature-card__number" aria-hidden="true">
-                  {String(index + 1).padStart(2, '0')}
-                </span>
-                <h3>{feature.title}</h3>
-                <p>{feature.description}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      </main>
-
-      <footer className="site-footer">
-        <Brand className="brand--footer" />
-        <p>A personal portfolio project.</p>
-      </footer>
-    </div>
+      ) : (
+        <DashboardPage />
+      )}
+    </AppShell>
   )
 }
 
