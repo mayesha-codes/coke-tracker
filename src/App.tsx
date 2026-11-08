@@ -4,6 +4,7 @@ import type { AppView } from './app/AppNavigation'
 import Icon from './components/ui/Icon'
 import type { IconName } from './components/ui/Icon'
 import DashboardPage from './features/dashboard/DashboardPage'
+import LogPage from './features/logging/LogPage'
 import './App.css'
 
 type PlaceholderDetails = {
@@ -14,15 +15,7 @@ type PlaceholderDetails = {
   planned: string[]
 }
 
-const placeholderDetails: Record<Exclude<AppView, 'home'>, PlaceholderDetails> = {
-  log: {
-    title: 'Log a drink',
-    icon: 'plus',
-    introduction: 'A little awareness starts with one entry.',
-    description:
-      'Your drink log is coming next. This will be your place to record a serving, its quantity, and when you had it.',
-    planned: ['Serving size and quantity', 'Date and time', 'Price per entry'],
-  },
+const placeholderDetails: Record<'history' | 'settings', PlaceholderDetails> = {
   history: {
     title: 'History',
     icon: 'history',
@@ -43,15 +36,16 @@ const placeholderDetails: Record<Exclude<AppView, 'home'>, PlaceholderDetails> =
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>('home')
-  const placeholder = activeView === 'home' ? null : placeholderDetails[activeView]
+  const placeholder = activeView === 'history' || activeView === 'settings'
+    ? placeholderDetails[activeView] : null
 
   return (
     <AppShell
       activeView={activeView}
       onNavigate={setActiveView}
-      title={placeholder?.title ?? 'Home'}
+      title={activeView === 'log' ? 'Log a drink' : placeholder?.title ?? 'Home'}
     >
-      {placeholder ? (
+      {activeView === 'log' ? <LogPage /> : placeholder ? (
         <section className="view-placeholder" aria-labelledby="view-heading">
           <div className="view-placeholder__content">
             <span className="view-placeholder__icon">
