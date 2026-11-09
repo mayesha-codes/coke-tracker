@@ -10,7 +10,9 @@ import type {
   NutritionCatalogReference,
   TrackingSettings,
 } from '../../domain/types'
-import { isRecord } from '../../domain/validation'
+import { isPositiveSafeInteger, isRecord } from '../../domain/validation'
+import { preparePersonalNutrition } from '../../features/nutrition/nutritionInput'
+import type { NutritionInputIssue } from '../../features/nutrition/nutritionInput'
 import { INITIAL_USER_PREFERENCES, validatePreferences } from '../../features/preferences/preferences'
 import type { PreferenceIssue } from '../../features/preferences/preferences'
 
@@ -18,6 +20,11 @@ import type { PreferenceIssue } from '../../features/preferences/preferences'
 export interface NutritionProvenance {
   readonly kind: 'reviewed' | 'user-provided'
   readonly reference: NutritionCatalogReference
+}
+
+/** Personal label values are structurally validated, never independently reviewed. */
+export interface PersonalNutritionSetup extends NutritionProvenance {
+  readonly kind: 'user-provided'
 }
 
 /** Existing calculations use entry; this envelope also preserves the source metadata. */
@@ -30,12 +37,14 @@ export interface SessionEntryRecord {
 export interface SessionState {
   readonly preferences: TrackingSettings
   readonly entries: readonly SessionEntryRecord[]
+  readonly personalNutrition: PersonalNutritionSetup | null
 }
 
 /** Payloads are checked at runtime before they can enter the validated session state. */
 export type SessionAction =
   | { readonly type: 'update-preferences'; readonly preferences: unknown }
   | { readonly type: 'add-entry'; readonly record: unknown }
+  | { readonly type: 'apply-personal-nutrition'; readonly id: string; readonly draft: unknown }
 
 export type SessionIssueField =
   | 'action'
@@ -49,6 +58,7 @@ export type SessionIssueField =
   | 'nutritionProvenance.reference'
   | `nutritionProvenance.reference.${Exclude<NutritionReferenceField, 'reference'>}`
   | `entries.${TotalsIssueField}`
+  | `personalNutrition.${NutritionInputIssue['field']}`
 
 export interface SessionIssue {
   readonly field: SessionIssueField
@@ -99,7 +109,69 @@ export function createSessionState(preferences: unknown = INITIAL_USER_PREFERENC
   }
   return Object.freeze({
     valid: true,
-    state: Object.freeze({ preferences: checked.preferences, entries: Object.freeze([]) }),
+    state: Object.freeze({
+      preferences: checked.preferences,
+      entries: Object.freeze([]),
+      personalNutrition: null,
+    }),
+  })
+}
+
+/** Compare normalized content only; editable spelling such as "0.00" is not a revision. */
+function sameNutritionContent(left: NutritionCatalogReference, right: NutritionCatalogReference): boolean {
+  return left.productDescription === right.productDescription
+    && left.sugarGramsPer100Ml === right.sugarGramsPer100Ml
+    && left.kcalPer100Ml === right.kcalPer100Ml
+    && left.source.label === right.source.label
+    && left.source.url === right.source.url
+}
+
+function applyPersonalNutrition(
+  state: SessionState,
+  action: Extract<SessionAction, { type: 'apply-personal-nutrition' }>,
+): SessionTransitionResult {
+  const current = state.personalNutrition
+  // Validate at the current version first, so unchanged submissions can remain
+  // valid even when another revision would exceed the safe-integer range.
+  const checked = preparePersonalNutrition(action.draft, {
+    id: action.id,
+    version: current === null ? 1 : current.reference.version,
+  })
+  if (checked.valid === false) {
+    return invalid(state, checked.issues.map(issue => ({
+      field: `personalNutrition.${issue.field}`,
+      message: issue.message,
+    })))
+  }
+
+  let reference = checked.reference
+  if (current !== null) {
+    // One personal setup keeps its caller-supplied identity across revisions.
+    if (reference.id !== current.reference.id) {
+      return invalid(state, [{
+        field: 'personalNutrition.id',
+        message: 'Keep the existing personal nutrition setup ID when updating its values.',
+      }])
+    }
+    if (sameNutritionContent(current.reference, reference)) {
+      return Object.freeze({ outcome: 'accepted', state })
+    }
+    const version = current.reference.version + 1
+    if (!isPositiveSafeInteger(version)) {
+      return invalid(state, [{
+        field: 'personalNutrition.version',
+        message: 'The next nutrition version exceeds the safe integer range.',
+      }])
+    }
+    // All content and the copied, frozen source were validated by the adapter;
+    // only the internally calculated, checked version changes here.
+    reference = Object.freeze({ ...reference, version })
+  }
+
+  const personalNutrition: PersonalNutritionSetup = Object.freeze({ kind: 'user-provided', reference })
+  return Object.freeze({
+    outcome: 'accepted',
+    state: Object.freeze({ ...state, personalNutrition }),
   })
 }
 
@@ -182,11 +254,17 @@ export function transitionSession(state: SessionState, action: SessionAction): S
     if (checked.valid === false) return invalid(state, preferenceIssues(checked.issues))
     return Object.freeze({
       outcome: 'accepted',
-      state: Object.freeze({ preferences: checked.preferences, entries: state.entries }),
+      state: Object.freeze({ ...state, preferences: checked.preferences }),
     })
   }
+  if (action.type === 'apply-personal-nutrition') {
+    return applyPersonalNutrition(state, action)
+  }
   if (action.type !== 'add-entry') {
-    return invalid(state, [{ field: 'action', message: 'Choose an add-entry or update-preferences action.' }])
+    return invalid(state, [{
+      field: 'action',
+      message: 'Choose an add-entry, update-preferences, or apply-personal-nutrition action.',
+    }])
   }
 
   const checked = validateSessionRecord(action.record)
@@ -212,6 +290,6 @@ export function transitionSession(state: SessionState, action: SessionAction): S
   }
   return Object.freeze({
     outcome: 'accepted',
-    state: Object.freeze({ preferences: state.preferences, entries: Object.freeze(entries) }),
+    state: Object.freeze({ ...state, entries: Object.freeze(entries) }),
   })
 }

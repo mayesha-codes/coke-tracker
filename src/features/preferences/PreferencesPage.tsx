@@ -4,6 +4,7 @@ import { useSession } from '../../app/session/sessionContext'
 import type { SessionTransitionResult } from '../../app/session/sessionState'
 import Icon from '../../components/ui/Icon'
 import type { TrackingSettings } from '../../domain/types'
+import PersonalNutritionSetup from '../nutrition/PersonalNutritionSetup'
 import { PREFERENCE_CURRENCIES, validatePreferences } from './preferences'
 import type { PreferenceIssue, PreferenceIssueField } from './preferences'
 import './PreferencesPage.css'
@@ -116,68 +117,71 @@ function PreferencesPage({ hasLogDraft = false }: PreferencesPageProps) {
       </header>
 
       <div className="preferences-layout">
-        <section className="preferences-card" aria-labelledby="preferences-form-heading">
-          <div className="preferences-card-heading">
-            <span className="preferences-card-icon"><Icon name="settings" size={23} /></span>
-            <div><p className="preferences-eyebrow">Make it yours</p><h2 id="preferences-form-heading">Your preferences</h2></div>
-          </div>
-          <p className="preferences-introduction">JPY and Asia/Tokyo are starting suggestions. Choose the currency and timezone that fit your day.</p>
+        <div className="personal-nutrition-settings-stack">
+          <section className="preferences-card" aria-labelledby="preferences-form-heading">
+            <div className="preferences-card-heading">
+              <span className="preferences-card-icon"><Icon name="settings" size={23} /></span>
+              <div><p className="preferences-eyebrow">Make it yours</p><h2 id="preferences-form-heading">Your preferences</h2></div>
+            </div>
+            <p className="preferences-introduction">JPY and Asia/Tokyo are starting suggestions. Choose the currency and timezone that fit your day.</p>
 
-          <form ref={formRef} className="preferences-form" noValidate onSubmit={handleSubmit}>
-            {submitted && issues.length > 0 && (
-              <div className="preferences-error-summary" id="preferences-error-summary" tabIndex={-1}
-                aria-labelledby="preferences-error-title">
-                <h3 id="preferences-error-title">Check your preferences</h3>
-                <ul>{issues.map(issue => <li key={issue.field}>{issue.message}</li>)}</ul>
+            <form ref={formRef} className="preferences-form" aria-labelledby="preferences-form-heading" noValidate onSubmit={handleSubmit}>
+              {submitted && issues.length > 0 && (
+                <div className="preferences-error-summary" id="preferences-error-summary" tabIndex={-1}
+                  aria-labelledby="preferences-error-title">
+                  <h3 id="preferences-error-title">Check your preferences</h3>
+                  <ul>{issues.map(issue => <li key={issue.field}>{issue.message}</li>)}</ul>
+                </div>
+              )}
+
+              <div className="preferences-field">
+                <label htmlFor="preferences-currency">Currency</label>
+                <select id="preferences-currency" className="preferences-input" value={currency} required
+                  aria-invalid={Boolean(currencyError)}
+                  aria-describedby={`preferences-currency-help${currencyError ? ' preferences-currency-error' : ''}`}
+                  onBlur={() => setTouched(previous => ({ ...previous, currency: true }))}
+                  onChange={event => { setCurrency(event.currentTarget.value); setPending(null) }}>
+                  {PREFERENCE_CURRENCIES.map(option => <option key={option.code} value={option.code}>{option.code} — {option.label}</option>)}
+                  {currentCurrencyOutsideMenu && <option value={state.preferences.currency}>{state.preferences.currency} — Current currency</option>}
+                </select>
+                <p className="preferences-help" id="preferences-currency-help">Used for new drafts. Previous entries keep their original currency; no currency conversion is performed.</p>
+                {currencyError && <p className="preferences-error" id="preferences-currency-error">{currencyError}</p>}
               </div>
-            )}
 
-            <div className="preferences-field">
-              <label htmlFor="preferences-currency">Currency</label>
-              <select id="preferences-currency" className="preferences-input" value={currency} required
-                aria-invalid={Boolean(currencyError)}
-                aria-describedby={`preferences-currency-help${currencyError ? ' preferences-currency-error' : ''}`}
-                onBlur={() => setTouched(previous => ({ ...previous, currency: true }))}
-                onChange={event => { setCurrency(event.currentTarget.value); setPending(null) }}>
-                {PREFERENCE_CURRENCIES.map(option => <option key={option.code} value={option.code}>{option.code} — {option.label}</option>)}
-                {currentCurrencyOutsideMenu && <option value={state.preferences.currency}>{state.preferences.currency} — Current currency</option>}
-              </select>
-              <p className="preferences-help" id="preferences-currency-help">Used for new drafts. Previous entries keep their original currency; no currency conversion is performed.</p>
-              {currencyError && <p className="preferences-error" id="preferences-currency-error">{currencyError}</p>}
-            </div>
+              <div className="preferences-field">
+                <label htmlFor="preferences-timezone">Reporting timezone</label>
+                <input id="preferences-timezone" className="preferences-input" type="text" value={reportingTimeZone}
+                  list="preferences-timezone-suggestions" required autoComplete="off" spellCheck={false}
+                  aria-invalid={Boolean(timezoneError)}
+                  aria-describedby={`preferences-timezone-help${timezoneError ? ' preferences-timezone-error' : ''}`}
+                  onBlur={() => setTouched(previous => ({ ...previous, reportingTimeZone: true }))}
+                  onChange={event => { setReportingTimeZone(event.currentTarget.value); setPending(null) }} />
+                <datalist id="preferences-timezone-suggestions">
+                  {timezoneSuggestions.map(timeZone => <option value={timeZone} key={timeZone} />)}
+                </datalist>
+                <p className="preferences-help" id="preferences-timezone-help">Enter an IANA timezone such as Asia/Tokyo, Asia/Dhaka, America/New_York, or UTC. Other supported IANA zones are welcome.</p>
+                {timezoneError && <p className="preferences-error" id="preferences-timezone-error">{timezoneError}</p>}
+              </div>
 
-            <div className="preferences-field">
-              <label htmlFor="preferences-timezone">Reporting timezone</label>
-              <input id="preferences-timezone" className="preferences-input" type="text" value={reportingTimeZone}
-                list="preferences-timezone-suggestions" required autoComplete="off" spellCheck={false}
-                aria-invalid={Boolean(timezoneError)}
-                aria-describedby={`preferences-timezone-help${timezoneError ? ' preferences-timezone-error' : ''}`}
-                onBlur={() => setTouched(previous => ({ ...previous, reportingTimeZone: true }))}
-                onChange={event => { setReportingTimeZone(event.currentTarget.value); setPending(null) }} />
-              <datalist id="preferences-timezone-suggestions">
-                {timezoneSuggestions.map(timeZone => <option value={timeZone} key={timeZone} />)}
-              </datalist>
-              <p className="preferences-help" id="preferences-timezone-help">Enter an IANA timezone such as Asia/Tokyo, Asia/Dhaka, America/New_York, or UTC. Other supported IANA zones are welcome.</p>
-              {timezoneError && <p className="preferences-error" id="preferences-timezone-error">{timezoneError}</p>}
-            </div>
-
-            <div className="preferences-draft-note">
-              <strong>Your unfinished Log draft stays with you between pages.</strong>
-              <p>Applying a different currency or timezone resets that draft, including its price and local date/time. Existing entries stay unchanged.</p>
-            </div>
-            <button className="preferences-apply" type="submit">Apply preferences</button>
-            <div className="preferences-confirmation" role="status">
-              {applied && <><p>Preferences applied for this session.</p>{pending?.resetsDraft && <p>Your previous Log draft has been reset.</p>}</>}
-            </div>
-          </form>
-        </section>
+              <div className="preferences-draft-note">
+                <strong>Your unfinished Log draft stays with you between pages.</strong>
+                <p>Applying a different currency or timezone resets that draft, including its price and local date/time. Existing entries stay unchanged.</p>
+              </div>
+              <button className="preferences-apply" type="submit">Apply preferences</button>
+              <div className="preferences-confirmation" role="status" aria-label="Preference application status">
+                {applied && <><p>Preferences applied for this session.</p>{pending?.resetsDraft && <p>Your previous Log draft has been reset.</p>}</>}
+              </div>
+            </form>
+          </section>
+          <PersonalNutritionSetup />
+        </div>
 
         <aside className="preferences-notes" aria-label="About your preferences">
           <section className="preferences-note preferences-note--temporary" aria-labelledby="preferences-temporary-title">
             <Icon name="sparkles" size={23} />
             <p className="preferences-eyebrow">A little heads-up</p>
             <h2 id="preferences-temporary-title">For this session</h2>
-            <p>Preferences and entries are temporary. Refreshing or closing this page clears them.</p>
+            <p>Preferences, personal nutrition, and entries are temporary. Refreshing or closing this page clears them.</p>
           </section>
           <section className="preferences-note" aria-labelledby="preferences-history-title">
             <Icon name="history" size={23} />

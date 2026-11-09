@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import App from '../../App'
 import SessionProvider from '../../app/session/SessionProvider'
 import { SessionContext, useSession } from '../../app/session/sessionContext'
 import { createSessionState, transitionSession } from '../../app/session/sessionState'
@@ -10,7 +11,10 @@ import type { TrackingSettings } from '../../domain/types'
 import PreferencesPage from './PreferencesPage'
 import { INITIAL_USER_PREFERENCES } from './preferences'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 function initialState(preferences: TrackingSettings = INITIAL_USER_PREFERENCES): SessionState {
   const created = createSessionState(preferences)
@@ -20,7 +24,10 @@ function initialState(preferences: TrackingSettings = INITIAL_USER_PREFERENCES):
 
 function StoredPreferences() {
   const { state } = useSession()
-  return <div data-testid="stored-preferences">{JSON.stringify(state.preferences)}</div>
+  return <>
+    <div data-testid="stored-preferences">{JSON.stringify(state.preferences)}</div>
+    <div data-testid="stored-nutrition">{JSON.stringify(state.personalNutrition)}</div>
+  </>
 }
 
 function setup(options: { preferences?: TrackingSettings; hasLogDraft?: boolean } = {}) {
@@ -54,7 +61,7 @@ describe('international session preferences', () => {
       'JPY — Japanese yen', 'USD — US dollar', 'EUR — Euro', 'BDT — Bangladeshi taka',
     ])
     expect(screen.queryByRole('combobox', { name: /language|country/i })).toBeNull()
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
   })
 
   it('keeps edits local until Apply and then preserves the existing daily limit', async () => {
@@ -63,10 +70,10 @@ describe('international session preferences', () => {
     await user.clear(timezoneField())
     await user.type(timezoneField(), 'Europe/Paris')
     expect(storedPreferences().currency).toBe('JPY')
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
     await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
     expect(storedPreferences()).toEqual({ currency: 'EUR', reportingTimeZone: 'Europe/Paris', dailyLimitMl: 500 })
-    expect(screen.getByRole('status').textContent).toBe('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('Preferences applied for this session.')
   })
 
   it('supports valid IANA zones beyond the helpful suggestions', async () => {
@@ -96,6 +103,96 @@ describe('international session preferences', () => {
   })
 })
 
+// Illustrative input for form behavior only; no production nutrition defaults.
+function fillPersonalNutrition() {
+  fireEvent.change(screen.getByLabelText('Product description'), { target: { value: 'My illustrative can' } })
+  fireEvent.change(screen.getByLabelText('Sugar (g per 100 ml)'), { target: { value: '10.5' } })
+  fireEvent.change(screen.getByLabelText('Calories (kcal per 100 ml)'), { target: { value: '42' } })
+  fireEvent.change(screen.getByLabelText('Source description'), { target: { value: 'Illustrative package label' } })
+}
+
+describe('separate preferences and personal nutrition forms', () => {
+  it('renders two named sibling forms without nesting either submission', () => {
+    setup()
+    const preferencesForm = screen.getByRole('form', { name: 'Your preferences' })
+    const nutritionForm = screen.getByRole('form', { name: 'Personal nutrition setup' })
+    expect(preferencesForm.contains(nutritionForm)).toBe(false)
+    expect(nutritionForm.contains(preferencesForm)).toBe(false)
+    expect(screen.getByLabelText<HTMLInputElement>('Product description').value).toBe('')
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toBe('')
+  })
+
+  it('applies nutrition without applying unfinished currency or timezone edits', async () => {
+    const user = setup({ hasLogDraft: true })
+    await user.selectOptions(currencyField(), 'EUR')
+    await user.clear(timezoneField())
+    await user.type(timezoneField(), 'Invalid/Zone')
+    fillPersonalNutrition()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    expect(storedPreferences()).toEqual(INITIAL_USER_PREFERENCES)
+    expect(screen.getByTestId('stored-nutrition').textContent).toContain('user-provided')
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toContain('applied')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
+    expect(screen.queryByText('Your previous Log draft has been reset.')).toBeNull()
+    expect(document.getElementById('preferences-error-summary')).toBeNull()
+  })
+
+  it('submits only the nutrition form when Enter is pressed in a nutrition field', async () => {
+    const user = setup()
+    await user.selectOptions(currencyField(), 'USD')
+    fillPersonalNutrition()
+    await user.click(screen.getByLabelText('Source description'))
+    await user.keyboard('{Enter}')
+    expect(screen.getByTestId('stored-nutrition').textContent).toContain('My illustrative can')
+    expect(storedPreferences().currency).toBe('JPY')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
+  })
+
+  it('applies preferences without validating or applying the blank nutrition form', async () => {
+    const user = setup()
+    await user.selectOptions(currencyField(), 'BDT')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    expect(storedPreferences().currency).toBe('BDT')
+    expect(screen.getByTestId('stored-nutrition').textContent).toBe('null')
+    expect(screen.getByLabelText('Product description').getAttribute('aria-invalid')).not.toBe('true')
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toBe('')
+  })
+
+  it('keeps both successful application statuses independent when the other form is submitted', async () => {
+    const user = setup()
+    fillPersonalNutrition()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    const nutritionStatus = screen.getByRole('status', { name: 'Nutrition application status' }).textContent
+    const nutritionBefore = screen.getByTestId('stored-nutrition').textContent
+    await user.selectOptions(currencyField(), 'USD')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toBe(nutritionStatus)
+    expect(screen.getByTestId('stored-nutrition').textContent).toBe(nutritionBefore)
+  })
+
+  it('retains applied personal nutrition across navigation without connecting it to Log or enabling Save', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    const user = userEvent.setup()
+    render(<SessionProvider><App /><StoredPreferences /></SessionProvider>)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    fillPersonalNutrition()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    const applied = screen.getByTestId('stored-nutrition').textContent
+    await user.click(screen.getByRole('button', { name: 'Log' }))
+    expect(screen.getByRole('button', { name: 'Save entry' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByLabelText('Nutrition reference').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('Reviewed product data is needed')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByTestId('stored-nutrition').textContent).toBe(applied)
+    expect(screen.getByLabelText<HTMLInputElement>('Product description').value).toBe('My illustrative can')
+    expect(within(screen.getByRole('region', { name: 'Applied for this session' }))
+      .getByText('User-provided — not independently verified.')).toBeDefined()
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toBe('')
+  })
+})
+
 describe('preference validation and accessible feedback', () => {
   it.each(['Not/AZone', '+09:00', ''])('rejects timezone %j and focuses the invalid field after Apply', async timeZone => {
     const user = setup()
@@ -107,7 +204,7 @@ describe('preference validation and accessible feedback', () => {
     expect(timezoneField().getAttribute('aria-describedby')).toContain('preferences-timezone-error')
     expect(document.getElementById('preferences-timezone-error')?.textContent).toContain('IANA timezone')
     expect(storedPreferences().reportingTimeZone).toBe('Asia/Tokyo')
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
   })
 
   it('focuses currency first if both controls are invalid', async () => {
@@ -138,10 +235,10 @@ describe('preference validation and accessible feedback', () => {
     await user.clear(timezoneField())
     await user.type(timezoneField(), 'UTC')
     await user.keyboard('{Enter}')
-    expect(screen.getByRole('status').textContent).toBe('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('Preferences applied for this session.')
     expect(storedPreferences().reportingTimeZone).toBe('UTC')
     await user.selectOptions(currencyField(), 'USD')
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
     expect(storedPreferences().currency).toBe('JPY')
   })
 
@@ -149,14 +246,14 @@ describe('preference validation and accessible feedback', () => {
     const user = setup({ hasLogDraft: true })
     await user.selectOptions(currencyField(), 'USD')
     await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
-    expect(screen.getByRole('status').textContent).toContain('Preferences applied for this session.')
-    expect(screen.getByRole('status').textContent).toContain('Your previous Log draft has been reset.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toContain('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toContain('Your previous Log draft has been reset.')
   })
 
   it('does not claim a draft reset when unchanged preferences are applied', async () => {
     const user = setup({ hasLogDraft: true })
     await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
-    expect(screen.getByRole('status').textContent).toBe('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('Preferences applied for this session.')
     expect(screen.queryByText('Your previous Log draft has been reset.')).toBeNull()
   })
 
@@ -164,19 +261,19 @@ describe('preference validation and accessible feedback', () => {
     const user = userEvent.setup()
     const state = initialState()
     const updatePreferences = vi.fn()
-    const view = render(<SessionContext.Provider value={{ state, updatePreferences, lastPreferenceResult: null }}>
+    const view = render(<SessionContext.Provider value={{ state, updatePreferences, lastPreferenceResult: null, applyPersonalNutrition: vi.fn(), lastNutritionResult: null }}>
       <PreferencesPage />
     </SessionContext.Provider>)
     await user.selectOptions(currencyField(), 'USD')
     await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
     expect(updatePreferences).toHaveBeenCalledWith({ ...INITIAL_USER_PREFERENCES, currency: 'USD' })
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
 
     const accepted = transitionSession(state, { type: 'update-preferences', preferences: updatePreferences.mock.calls[0][0] })
     expect(accepted.outcome).toBe('accepted')
-    view.rerender(<SessionContext.Provider value={{ state: accepted.state, updatePreferences, lastPreferenceResult: accepted }}>
+    view.rerender(<SessionContext.Provider value={{ state: accepted.state, updatePreferences, lastPreferenceResult: accepted, applyPersonalNutrition: vi.fn(), lastNutritionResult: null }}>
       <PreferencesPage />
     </SessionContext.Provider>)
-    expect(screen.getByRole('status').textContent).toBe('Preferences applied for this session.')
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('Preferences applied for this session.')
   })
 })
