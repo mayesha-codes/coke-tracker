@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DrinkEntryForm from './DrinkEntryForm'
-import type { NutritionCatalogReference } from '../../domain/types'
+import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
 
 afterEach(cleanup)
 
@@ -20,6 +20,7 @@ function makeReference(): NutritionCatalogReference {
 }
 
 function renderForm(options: {
+  currency?: CurrencyCode
   references?: readonly NutritionCatalogReference[]
   timeZone?: string
   initialLocalDateTime?: string
@@ -27,7 +28,7 @@ function renderForm(options: {
   const user = userEvent.setup()
   render(<DrinkEntryForm
     references={options.references ?? [makeReference()]}
-    currency="BDT"
+    currency={options.currency ?? 'BDT'}
     timeZone={options.timeZone ?? 'Asia/Dhaka'}
     initialLocalDateTime={options.initialLocalDateTime ?? '2026-11-08T00:05'}
     draftId="test-draft-id"
@@ -43,6 +44,10 @@ function priceInput() {
   return screen.getByRole<HTMLInputElement>('textbox', { name: /Total paid for all drinks/ })
 }
 
+function customSizeInput() {
+  return screen.getByRole<HTMLInputElement>('textbox', { name: 'Custom serving size (ml)' })
+}
+
 function metricText(name: string): string {
   const preview = screen.getByRole('region', { name: 'Draft preview' })
   const label = within(preview).getByText(name, { selector: 'dt' })
@@ -54,15 +59,17 @@ async function selectReference(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('DrinkEntryForm controls and draft preview', () => {
-  it('offers four native serving choices and updates volume when selected', async () => {
+  it('offers the five presets followed by Custom and defaults to 330 ml', async () => {
     const user = renderForm()
-    for (const size of [200, 330, 500, 1000]) {
-      expect(screen.getByRole('radio', { name: `${size} ml` })).toBeDefined()
-    }
+    const servings = screen.getByRole('group', { name: 'Serving size' })
+    expect(within(servings).getAllByRole('radio').map(radio => radio.getAttribute('aria-label'))).toEqual([
+      '200 ml', '330 ml', '350 ml', '500 ml', '1000 ml', 'Custom',
+    ])
     expect(screen.getByRole<HTMLInputElement>('radio', { name: '330 ml' }).checked).toBe(true)
-    await user.click(screen.getByRole('radio', { name: '500 ml' }))
-    expect(screen.getByRole<HTMLInputElement>('radio', { name: '500 ml' }).checked).toBe(true)
-    expect(metricText('Volume')).toContain('500 ml')
+    expect(screen.queryByRole('textbox', { name: 'Custom serving size (ml)' })).toBeNull()
+    await user.click(screen.getByRole('radio', { name: '350 ml' }))
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: '350 ml' }).checked).toBe(true)
+    expect(metricText('Volume')).toContain('350 ml')
   })
 
   it('supports native radio keyboard navigation', async () => {
@@ -148,6 +155,201 @@ describe('DrinkEntryForm controls and draft preview', () => {
     expect(screen.queryByRole('link', { name: 'Bad source' })).toBeNull()
     expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+})
+
+describe('custom serving sizes', () => {
+  it('calculates two custom 375 ml drinks without requiring nutrition data or changing the total price', async () => {
+    const user = renderForm({ references: [] })
+    await user.type(priceInput(), '100.50')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    expect(customSizeInput().value).toBe('')
+    await user.type(customSizeInput(), '375')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    expect(metricText('Volume')).toContain('750 ml')
+    expect(metricText('Total spending')).toContain('BDT 100.50')
+    expect(priceInput().value).toBe('100.50')
+    expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
+    expect(metricText('Coke-only calories')).toContain('Choose a reviewed nutrition reference')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('preserves exact custom text when changing presets and returning to Custom', async () => {
+    const user = renderForm()
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.type(customSizeInput(), ' 00375 ')
+    expect(customSizeInput().value).toBe(' 00375 ')
+    expect(metricText('Volume')).toContain('375 ml')
+    await user.click(screen.getByRole('radio', { name: '500 ml' }))
+    expect(screen.queryByRole('textbox', { name: 'Custom serving size (ml)' })).toBeNull()
+    expect(metricText('Volume')).toContain('500 ml')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    expect(customSizeInput().value).toBe(' 00375 ')
+    expect(metricText('Volume')).toContain('375 ml')
+  })
+
+  it('keeps Custom selected when its value equals the 350 ml preset', async () => {
+    const user = renderForm()
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.type(customSizeInput(), '350')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Custom' }).checked).toBe(true)
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: '350 ml' }).checked).toBe(false)
+    expect(customSizeInput().value).toBe('350')
+    expect(metricText('Volume')).toContain('350 ml')
+  })
+
+  it('preserves a cached known price while changing Custom size and quantity in unknown-price mode', async () => {
+    const user = renderForm()
+    await user.type(priceInput(), '123.45')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.type(customSizeInput(), '375')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    await user.click(screen.getByRole('radio', { name: '350 ml' }))
+    expect(metricText('Total spending')).toContain('Unknown')
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('123.45')
+    expect(metricText('Total spending')).toContain('BDT 123.45')
+  })
+
+  it('preserves native radio arrows and lets Tab reach the Custom input without stealing focus', async () => {
+    const user = renderForm()
+    await user.click(screen.getByRole('radio', { name: '1000 ml' }))
+    await user.keyboard('{ArrowRight}')
+    const customRadio = screen.getByRole<HTMLInputElement>('radio', { name: 'Custom' })
+    expect(customRadio.checked).toBe(true)
+    expect(document.activeElement).toBe(customRadio)
+    expect(customSizeInput().value).toBe('')
+    await user.keyboard(' ')
+    expect(document.activeElement).toBe(customRadio)
+    await user.tab()
+    expect(document.activeElement).toBe(customSizeInput())
+  })
+
+  it('waits until the blank Custom input is blurred before showing its field error', async () => {
+    const user = renderForm({ references: [] })
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    expect(document.getElementById('logging-serving-error')).toBeNull()
+    await user.tab()
+    expect(document.activeElement).toBe(customSizeInput())
+    await user.tab()
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById('logging-serving-error')?.textContent).toMatch(/serving|millilitres|ml/i)
+  })
+
+  it.each([
+    { label: 'blank', value: '' },
+    { label: 'fractional', value: '375.5' },
+    { label: 'zero', value: '0' },
+    { label: 'negative', value: '-1' },
+    { label: 'exponent-form', value: '1e3' },
+    { label: 'unsafe integer', value: '9007199254740992' },
+  ])('rejects a $label Custom size without replacing or rounding its text', async ({ value }) => {
+    const user = renderForm({ references: [] })
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.tab()
+    if (value) await user.type(customSizeInput(), value)
+    await user.tab()
+    expect(customSizeInput().value).toBe(value)
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('true')
+    expect(customSizeInput().getAttribute('aria-describedby')).toContain('logging-serving-error')
+    expect(document.getElementById('logging-serving-error')?.textContent?.length).toBeGreaterThan(0)
+    expect(metricText('Volume')).toContain('Enter a valid quantity and serving size')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    if (value === '9007199254740992') {
+      expect(document.getElementById('logging-serving-error')?.textContent).toMatch(/large|range|limit/i)
+    }
+  })
+
+  it('focuses an invalid Custom size after Review and lets correction clear the error', async () => {
+    const user = renderForm({ references: [] })
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.tab()
+    await user.type(customSizeInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(document.activeElement).toBe(customSizeInput())
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('true')
+    await user.clear(customSizeInput())
+    await user.type(customSizeInput(), '375')
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('false')
+    expect(metricText('Volume')).toContain('375 ml')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('focuses the Custom input before Quantity when both fields are invalid', async () => {
+    const user = renderForm({ references: [] })
+    await user.clear(quantityInput())
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(document.activeElement).toBe(customSizeInput())
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('true')
+    expect(quantityInput().getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('rejects an overflowing quantity times Custom size even when both numbers are individually safe', async () => {
+    const user = renderForm({ references: [] })
+    await user.type(priceInput(), '100.50')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.tab()
+    await user.type(customSizeInput(), '4503599627370496')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(customSizeInput().value).toBe('4503599627370496')
+    expect(document.activeElement).toBe(customSizeInput())
+    expect(document.getElementById('logging-serving-error')?.textContent).toMatch(/large|range|limit/i)
+    expect(metricText('Volume')).toContain('safe integer range')
+    expect(metricText('Total spending')).toContain('BDT 100.50')
+    expect(priceInput().value).toBe('100.50')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('preserves invalid Custom text across a preset toggle and validates it again on return', async () => {
+    const user = renderForm({ references: [] })
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.type(customSizeInput(), '1e3')
+    await user.tab()
+    await user.click(screen.getByRole('radio', { name: '200 ml' }))
+    expect(metricText('Volume')).toContain('200 ml')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    expect(customSizeInput().value).toBe('1e3')
+    expect(customSizeInput().getAttribute('aria-invalid')).toBe('true')
+  })
+})
+
+describe('currency-aware price input and preview', () => {
+  it.each(['100', '0'])('displays the JPY total %s without fractional digits', async amount => {
+    const user = renderForm({ currency: 'JPY' })
+    await user.type(priceInput(), amount)
+    expect(metricText('Total spending')).toContain(`JPY ${amount}`)
+    expect(metricText('Total spending')).not.toContain('.00')
+    expect(priceInput().value).toBe(amount)
+  })
+
+  it('reports fractional yen beside the price field instead of rounding it', async () => {
+    const user = renderForm({ currency: 'JPY' })
+    await user.type(priceInput(), '100.5')
+    await user.tab()
+    expect(priceInput().value).toBe('100.5')
+    expect(priceInput().getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById('logging-price-error')?.textContent).toContain('0 decimal places')
+    expect(metricText('Total spending')).toContain('Enter a valid total price')
+  })
+
+  it('keeps an unknown JPY price distinct from known zero', async () => {
+    const user = renderForm({ currency: 'JPY' })
+    await user.type(priceInput(), '0')
+    expect(metricText('Total spending')).toContain('JPY 0')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    expect(metricText('Total spending')).toContain('Unknown')
+    expect(metricText('Total spending')).not.toContain('JPY 0')
+    expect(priceInput().disabled).toBe(true)
+  })
+
+  it.each(['USD', 'EUR', 'BDT'])('keeps two decimal places for %s totals', async currency => {
+    const user = renderForm({ currency })
+    await user.type(priceInput(), '12.50')
+    expect(metricText('Total spending')).toContain(`${currency} 12.50`)
   })
 })
 

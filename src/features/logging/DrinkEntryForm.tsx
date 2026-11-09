@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FocusEvent, FormEvent } from 'react'
 import { createNutritionReference } from '../../domain/nutrition'
+import { SERVING_PRESETS } from '../../domain/servings'
 import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
 import { isIdentifier } from '../../domain/validation'
 import ConsumptionTimeField from './ConsumptionTimeField'
 import DrinkPreview from './DrinkPreview.tsx'
-import { prepareDrinkEntry } from './drinkDraft'
+import { positiveIntegerFromText, prepareDrinkEntry } from './drinkDraft'
 import type { DrinkDraft, DrinkDraftIssue, DrinkDraftIssueField } from './drinkDraft'
 import { deriveDrinkPreview } from './drinkPreview.ts'
 import { resolveLocalDateTime } from './localDateTime'
@@ -14,6 +15,7 @@ import NutritionReferenceField from './NutritionReferenceField'
 import PriceField from './PriceField'
 import QuantityField from './QuantityField'
 import ServingSizeField from './ServingSizeField'
+import type { ServingSizeSelection } from './ServingSizeField'
 
 type DrinkEntryFormProps = {
   references: readonly NutritionCatalogReference[]
@@ -34,10 +36,10 @@ function controlField(field: DrinkDraftIssueField): ControlField | null {
   return null
 }
 
-function selectorForIssue(field: DrinkDraftIssueField): string {
+function selectorForIssue(field: DrinkDraftIssueField, servingSelection: ServingSizeSelection): string {
   if (field === 'disambiguation') return '[name="logging-time-choice"]'
   switch (controlField(field)) {
-    case 'serving': return '[name="serving-size"]'
+    case 'serving': return servingSelection === 'custom' ? '#logging-custom-serving' : '[name="serving-size"]:checked'
     case 'quantity': return '#logging-quantity'
     case 'price': return '#logging-price'
     case 'time': return '#logging-time'
@@ -54,7 +56,8 @@ function DrinkEntryForm({
   initialLocalDateTime,
   draftId,
 }: DrinkEntryFormProps) {
-  const [servingMlText, setServingMlText] = useState('330')
+  const [servingSelection, setServingSelection] = useState<ServingSizeSelection>('330ml')
+  const [customMlText, setCustomMlText] = useState('')
   const [quantityText, setQuantityText] = useState('1')
   const [priceMode, setPriceMode] = useState<'known' | 'unknown'>('known')
   const [knownPriceText, setKnownPriceText] = useState('')
@@ -66,6 +69,11 @@ function DrinkEntryForm({
   const [reviewStatus, setReviewStatus] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
   const pendingFocus = useRef<string | null>(null)
+
+  // The choice and editable Custom text stay separate, even when Custom equals a preset.
+  const selectedPreset = SERVING_PRESETS.find(preset => preset.id === servingSelection)
+  const servingMlText = servingSelection === 'custom' ? customMlText
+    : selectedPreset === undefined ? '' : String(selectedPreset.servingMl)
 
   const checkedReferences = references.map(reference => createNutritionReference(reference))
   const validReferences: NutritionCatalogReference[] = []
@@ -140,17 +148,34 @@ function DrinkEntryForm({
   function fieldError(field: ControlField): string | undefined {
     if (field === 'reference' && catalogError !== undefined) return catalogError
     if (reviewCount === 0 && !touched[field]) return undefined
-    return issues.filter(issue => controlField(issue.field) === field).map(issue => issue.message).join(' ') || undefined
+    const fieldIssues = issues.filter(issue => controlField(issue.field) === field)
+    if (field === 'serving' && servingSelection === 'custom' && fieldIssues.length > 0 &&
+        positiveIntegerFromText(customMlText) === null) {
+      // Existing adapters decide validity; these messages explain the Custom input issue.
+      if (customMlText.trim() === '') return 'Enter a custom serving size in ml.'
+      if (Number(customMlText) > Number.MAX_SAFE_INTEGER) {
+        return 'That serving size is too large. Enter a smaller whole number of millilitres.'
+      }
+      return 'Enter a whole number of millilitres greater than zero, using digits only.'
+    }
+    return fieldIssues.map(issue => issue.message).join(' ') || undefined
   }
 
   function handleBlur(event: FocusEvent<HTMLFormElement>) {
+    // Review reveals errors after its click, so blur feedback cannot move the button mid-click.
+    if (event.relatedTarget instanceof HTMLButtonElement && event.relatedTarget.type === 'submit') return
     const target = event.target
     let field: ControlField | undefined
     if (target.id === 'logging-quantity') field = 'quantity'
     else if (target.id === 'logging-price' || target.getAttribute('name') === 'price-mode') field = 'price'
     else if (target.id === 'logging-time' || target.getAttribute('name') === 'logging-time-choice') field = 'time'
     else if (target.id === 'logging-reference') field = 'reference'
-    else if (target.getAttribute('name') === 'serving-size') field = 'serving'
+    else if (target.id === 'logging-custom-serving') field = 'serving'
+    else if (target.getAttribute('name') === 'serving-size') {
+      // Moving between radios or into Custom is still editing the same field.
+      if (event.relatedTarget instanceof Node && target.closest('fieldset')?.contains(event.relatedTarget)) return
+      field = 'serving'
+    }
     if (field !== undefined) setTouched(previous => ({ ...previous, [field]: true }))
   }
 
@@ -159,7 +184,10 @@ function DrinkEntryForm({
     setReviewCount(count => count + 1)
     if (issues.length > 0) {
       setReviewStatus('')
-      pendingFocus.current = selectorForIssue(issues[0].field)
+      // Custom appears before Quantity, so focus it first when both fields need attention.
+      const firstIssue = servingSelection === 'custom'
+        ? issues.find(issue => controlField(issue.field) === 'serving') ?? issues[0] : issues[0]
+      pendingFocus.current = selectorForIssue(firstIssue.field, servingSelection)
       return
     }
     setReviewStatus('Ready to save — not saved yet.')
@@ -182,10 +210,9 @@ function DrinkEntryForm({
             </div>
           )}
 
-          <ServingSizeField value={servingMlText} error={fieldError('serving')} onChange={value => {
-            changed()
-            setServingMlText(value)
-          }} />
+          <ServingSizeField selection={servingSelection} customMlText={customMlText} error={fieldError('serving')}
+            onSelectionChange={value => { changed(); setServingSelection(value) }}
+            onCustomMlChange={value => { changed(); setCustomMlText(value) }} />
 
           <div className="logging-form__row">
             <QuantityField value={quantityText} error={fieldError('quantity')} onChange={value => {

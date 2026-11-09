@@ -3,10 +3,11 @@ import { SERVING_PRESETS } from './servings'
 import type { ServingPreset } from './types'
 
 describe('serving-size presets', () => {
-  it('provides the four approved serving sizes with their labels', () => {
+  it('provides five numeric presets while preserving the existing serving sizes', () => {
     expect(SERVING_PRESETS).toEqual([
       { id: '200ml', label: '200 ml', servingMl: 200 },
       { id: '330ml', label: '330 ml', servingMl: 330 },
+      { id: '350ml', label: '350 ml', servingMl: 350 },
       { id: '500ml', label: '500 ml', servingMl: 500 },
       { id: '1000ml', label: '1,000 ml', servingMl: 1000 },
     ])
@@ -32,7 +33,7 @@ describe('serving-size presets', () => {
 
     expect(Reflect.set(SERVING_PRESETS, 'length', 0)).toBe(false)
     expect(Reflect.set(SERVING_PRESETS[0], 'servingMl', 375)).toBe(false)
-    expect(SERVING_PRESETS).toHaveLength(4)
+    expect(SERVING_PRESETS).toHaveLength(5)
     expect(SERVING_PRESETS[0].servingMl).toBe(200)
   })
 

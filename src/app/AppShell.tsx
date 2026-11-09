@@ -55,7 +55,7 @@ function AppShell({ activeView, onNavigate, title, children }: AppShellProps) {
             <span>Your daily reset</span>
             <p>{title}</p>
           </div>
-          <span className="workspace-status">In development</span>
+          <span className="workspace-status">Temporary session</span>
         </header>
 
         <main
@@ -70,7 +70,7 @@ function AppShell({ activeView, onNavigate, title, children }: AppShellProps) {
 
         <footer className="workspace-footer">
           <span>Small sips. Big shifts.</span>
-          <span>A personal portfolio project.</span>
+          <span>Preferences and entries are temporary. Refreshing clears this session.</span>
         </footer>
       </div>
     </div>

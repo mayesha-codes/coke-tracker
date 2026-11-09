@@ -1,6 +1,7 @@
 import { formatMoney } from '../../domain/money'
 import type { CurrencyCode } from '../../domain/types'
 import type { DrinkPreviewState, PreviewValue } from './drinkPreview.ts'
+import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 
 interface DrinkPreviewProps {
   preview: DrinkPreviewState
@@ -20,7 +21,7 @@ function NumberValue({ value, unit }: { value: PreviewValue<number>; unit: strin
   if (value.status === 'unavailable') return <UnavailableValue reason={value.reason} />
 
   // Rounding belongs only to this display; preview state retains the full estimate.
-  const formatter = new Intl.NumberFormat('en-BD', { maximumFractionDigits: unit === 'ml' ? 0 : 2 })
+  const formatter = new Intl.NumberFormat(ENGLISH_DISPLAY_LOCALE, { maximumFractionDigits: unit === 'ml' ? 0 : 2 })
   const text = value.value > 0 && value.value < 0.01 && unit !== 'ml'
     ? '<0.01'
     : formatter.format(value.value)
@@ -35,7 +36,7 @@ function DrinkPreview({ preview, currency }: DrinkPreviewProps) {
     ? { status: 'available' as const, value: preview.nutrition.value.kcal }
     : preview.nutrition
   const money = preview.spending.status === 'available'
-    ? formatMoney(preview.spending.value)
+    ? formatMoney(preview.spending.value, ENGLISH_DISPLAY_LOCALE)
     : null
 
   return (

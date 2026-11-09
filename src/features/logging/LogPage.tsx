@@ -16,6 +16,9 @@ type LogPageProps = {
   /** Injectable UI initialization values keep component tests independent of the clock. */
   initialReferenceUtc?: UtcTimestamp
   draftId?: string
+  /** A retained, hidden Log view must not duplicate the active page's heading ID. */
+  headingId?: string
+  draftWasReset?: boolean
 }
 
 function localInputValue(reference: UtcTimestamp, timeZone: string): string {
@@ -35,6 +38,8 @@ function LogPage({
   timeZone = DEFAULT_TRACKING_SETTINGS.reportingTimeZone,
   initialReferenceUtc,
   draftId,
+  headingId = 'view-heading',
+  draftWasReset = false,
 }: LogPageProps) {
   // Clock and identifier generation are confined to the UI boundary, once per mounted draft.
   const [initialTime] = useState(() => localInputValue(
@@ -48,7 +53,7 @@ function LogPage({
       <header className="logging-page__heading">
         <div>
           <p className="logging-eyebrow">One small shift at a time</p>
-          <h1 id="view-heading">Log a drink<span aria-hidden="true">.</span></h1>
+          <h1 id={headingId}>Log a drink<span aria-hidden="true">.</span></h1>
           <p className="logging-page__introduction">
             Start with a serving, a moment, and a little awareness.
           </p>
@@ -58,9 +63,16 @@ function LogPage({
 
       <div className="logging-notice">
         <span className="logging-notice__icon" aria-hidden="true"><Icon name="sparkles" size={20} /></span>
-        <p><strong>Your draft, without the commitment.</strong> Explore the form and review your details.
-          Nothing is recorded; saving and persistence will be added later.</p>
+        <p><strong>Your draft stays with you between pages.</strong> Changing currency or reporting timezone starts a new draft.
+          Refreshing clears your draft and preferences. Drink saving is not available yet.</p>
       </div>
+
+      {draftWasReset && (
+        <div className="logging-notice" role="status">
+          <p><strong>Your previous draft was cleared after a currency or timezone change.</strong> Check the new
+            date and time, and enter the total price again before reviewing.</p>
+        </div>
+      )}
 
       <section className="logging-card" aria-label="Drink entry form">
         <DrinkEntryForm

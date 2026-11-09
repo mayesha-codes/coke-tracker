@@ -1,7 +1,7 @@
 import { TZDateMini, tzOffset, tzScan } from '@date-fns/tz'
 import { DEFAULT_TRACKING_SETTINGS } from './types'
 import type { UtcTimestamp } from './types'
-import { normalizeUtcTimestamp } from './validation'
+import { isNamedTimeZone, normalizeUtcTimestamp } from './validation'
 
 export type ReportingPeriodKind = 'day' | 'week' | 'month'
 
@@ -33,18 +33,6 @@ function invalid(issues: readonly PeriodIssue[]): PeriodResult {
 
 function failure(field: PeriodIssue['field'], message: string): PeriodResult {
   return invalid([{ source: 'period', field, message, entryIndex: null }])
-}
-
-function isNamedTimeZone(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) return false
-  // Intl also accepts literal offsets; reporting preferences require a named IANA zone.
-  if (/^[+-]/.test(value)) return false
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: value }).format(0)
-    return true
-  } catch {
-    return false
-  }
 }
 
 /** UTC is used only as a neutral carrier of civil dates, not as the reporting zone. */

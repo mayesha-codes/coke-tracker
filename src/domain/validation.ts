@@ -13,6 +13,19 @@ export function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
+/** Accept supported named IANA zones (including UTC), never literal UTC offsets. */
+export function isNamedTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) return false
+  // Intl also accepts literal offsets; reporting preferences require a named IANA zone.
+  if (/^[+-]/.test(value)) return false
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value }).format(0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Require explicit UTC with seconds, optionally 1–3 fractional digits, and Z or +00:00. */
 export function normalizeUtcTimestamp(value: unknown): string | null {
   if (typeof value !== 'string') return null

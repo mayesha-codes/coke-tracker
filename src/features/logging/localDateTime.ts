@@ -1,7 +1,7 @@
 import { TZDateMini, tzOffset, tzScan } from '@date-fns/tz'
 import { DEFAULT_TRACKING_SETTINGS } from '../../domain/types'
 import type { UtcTimestamp } from '../../domain/types'
-import { normalizeUtcTimestamp } from '../../domain/validation'
+import { isNamedTimeZone, normalizeUtcTimestamp } from '../../domain/validation'
 
 export type LocalTimeChoice = 'earlier' | 'later'
 
@@ -35,17 +35,6 @@ function failure(
       candidates: Object.freeze(candidates.map(candidate => Object.freeze({ ...candidate }))),
     }),
   })
-}
-
-function isNamedTimeZone(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) return false
-  if (/^[+-]/.test(value)) return false
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: value }).format(0)
-    return true
-  } catch {
-    return false
-  }
 }
 
 /** Validate the clock fields using the existing parser, without assigning them a timezone yet. */

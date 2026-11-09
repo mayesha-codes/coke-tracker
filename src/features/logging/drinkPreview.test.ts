@@ -32,6 +32,46 @@ describe('deriveDrinkPreview', () => {
     expect(preview.issues.map(issue => issue.field)).toEqual(['nutritionReference'])
   })
 
+  it('calculates a custom 375 ml serving twice without inventing nutrition or multiplying the price', () => {
+    const draft = { ...makeDraft(), servingMlText: ' 00375 ' }
+    const preview = deriveDrinkPreview(draft, undefined)
+    expect(preview.volume).toEqual({ status: 'available', value: 750 })
+    expect(preview.nutrition.status).toBe('unavailable')
+    expect(preview.spending).toEqual({ status: 'available', value: { amountMinor: 10050, currency: 'BDT' } })
+    expect(preview.issues.map(issue => issue.field)).toEqual(['nutritionReference'])
+    expect(draft.servingMlText).toBe(' 00375 ')
+  })
+
+  it.each(['', '375.5', '0', '-1', '1e3', '9007199254740992'])(
+    'rejects invalid custom volume text %j even without a nutrition reference', servingMlText => {
+      const preview = deriveDrinkPreview({ ...makeDraft(), servingMlText }, undefined)
+      expect(preview.volume.status).toBe('unavailable')
+      expect(preview.nutrition.status).toBe('unavailable')
+      expect(preview.spending).toEqual({ status: 'available', value: { amountMinor: 10050, currency: 'BDT' } })
+      expect(preview.issues.map(issue => issue.field)).toEqual(['servingMlText', 'nutritionReference'])
+    },
+  )
+
+  it('rejects overflowing custom volume before requiring nutrition data', () => {
+    const draft = { ...makeDraft(), quantityText: '2', servingMlText: '4503599627370496' }
+    const preview = deriveDrinkPreview(draft, undefined)
+    expect(preview.volume.status).toBe('unavailable')
+    expect(preview.nutrition.status).toBe('unavailable')
+    expect(preview.issues.map(issue => issue.field)).toEqual(['servingMlText', 'nutritionReference'])
+    expect(preview.issues.find(issue => issue.field === 'servingMlText')?.message).toContain('safe integer range')
+    expect(preview.spending).toEqual({ status: 'available', value: { amountMinor: 10050, currency: 'BDT' } })
+    expect(draft.servingMlText).toBe('4503599627370496')
+  })
+
+  it('accepts the largest safe custom volume when the quantity is one and nutrition is unavailable', () => {
+    const preview = deriveDrinkPreview({
+      ...makeDraft(), quantityText: '1', servingMlText: String(Number.MAX_SAFE_INTEGER),
+    }, undefined)
+    expect(preview.volume).toEqual({ status: 'available', value: Number.MAX_SAFE_INTEGER })
+    expect(preview.nutrition.status).toBe('unavailable')
+    expect(preview.issues.map(issue => issue.field)).toEqual(['nutritionReference'])
+  })
+
   it('uses the supplied reviewed reference through domain nutrition calculations without rounding', () => {
     const preview = deriveDrinkPreview(makeDraft(), makeReference())
     expect(preview.nutrition.status).toBe('available')

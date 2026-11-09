@@ -29,6 +29,22 @@ describe('the preview-only Log page', () => {
     expect(screen.getByLabelText(/consumption date and time/i)).toHaveProperty('value', '2026-11-07T18:05')
   })
 
+  it('initializes a Tokyo draft and formats its yen price without decimal places', async () => {
+    const user = userEvent.setup()
+    render(<LogPage {...initialization} currency="JPY" timeZone="Asia/Tokyo" />)
+    expect(screen.getByLabelText(/consumption date and time/i)).toHaveProperty('value', '2026-11-08T03:05')
+    await user.type(screen.getByRole('textbox', { name: 'Total paid for all drinks (JPY)' }), '100')
+    const preview = screen.getByRole('region', { name: 'Draft preview' })
+    expect(within(preview).getByText(/JPY\s+100$/)).toBeDefined()
+    expect(within(preview).queryByText(/JPY\s+100\.00/)).toBeNull()
+  })
+
+  it('explains when changed preferences have cleared an earlier draft', () => {
+    render(<LogPage {...initialization} draftWasReset headingId="retained-log-heading" />)
+    expect(screen.getByRole('heading', { level: 1 }).id).toBe('retained-log-heading')
+    expect(screen.getByText('Your previous draft was cleared after a currency or timezone change.')).toBeDefined()
+  })
+
   it('does not replace an invalid explicitly supplied initial time with the current time', () => {
     render(<LogPage initialReferenceUtc="invalid" draftId="invalid-time" />)
     expect(screen.getByLabelText(/consumption date and time/i)).toHaveProperty('value', '')

@@ -64,7 +64,7 @@ export interface DrinkEntry {
 /** The caller supplies record details; creation adds a copied nutrition snapshot. */
 export type CreateDrinkEntryInput = Omit<DrinkEntry, 'nutrition'>
 
-export type ServingPresetId = '200ml' | '330ml' | '500ml' | '1000ml'
+export type ServingPresetId = '200ml' | '330ml' | '350ml' | '500ml' | '1000ml'
 
 /** Size only: prices and nutrition belong to separate data. */
 export interface ServingPreset {

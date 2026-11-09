@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import AppShell from './app/AppShell'
 import type { AppView } from './app/AppNavigation'
+import { useSession } from './app/session/sessionContext'
 import Icon from './components/ui/Icon'
 import type { IconName } from './components/ui/Icon'
 import DashboardPage from './features/dashboard/DashboardPage'
 import LogPage from './features/logging/LogPage'
+import PreferencesPage from './features/preferences/PreferencesPage'
 import './App.css'
 
 type PlaceholderDetails = {
@@ -15,7 +17,7 @@ type PlaceholderDetails = {
   planned: string[]
 }
 
-const placeholderDetails: Record<'history' | 'settings', PlaceholderDetails> = {
+const placeholderDetails: Record<'history', PlaceholderDetails> = {
   history: {
     title: 'History',
     icon: 'history',
@@ -24,28 +26,46 @@ const placeholderDetails: Record<'history' | 'settings', PlaceholderDetails> = {
       'Once logging is available, your entries will live here. You will be able to browse your days and make corrections.',
     planned: ['Entries grouped by day', 'Edit or remove a drink', 'Clear, readable history'],
   },
-  settings: {
-    title: 'Settings',
-    icon: 'settings',
-    introduction: 'A goal that fits your day.',
-    description:
-      'Your personal preferences are coming next. You will be able to choose a daily limit and how your information is displayed.',
-    planned: ['Your display name', 'Daily goal preferences', 'Currency and reporting preferences'],
-  },
 }
 
 function App() {
+  const { state } = useSession()
   const [activeView, setActiveView] = useState<AppView>('home')
-  const placeholder = activeView === 'history' || activeView === 'settings'
-    ? placeholderDetails[activeView] : null
+  const [hasVisitedLog, setHasVisitedLog] = useState(false)
+  const { currency, reportingTimeZone } = state.preferences
+  const draftKey = JSON.stringify([currency, reportingTimeZone])
+  const [draftPreferences, setDraftPreferences] = useState({ key: draftKey, wasReset: false })
+  const placeholder = activeView === 'history' ? placeholderDetails.history : null
+
+  // Track an actual change before rendering the new draft, even while Log is hidden.
+  if (draftPreferences.key !== draftKey) {
+    setDraftPreferences({ key: draftKey, wasReset: hasVisitedLog || draftPreferences.wasReset })
+  }
+
+  function navigate(view: AppView) {
+    if (view === 'log') setHasVisitedLog(true)
+    setActiveView(view)
+  }
 
   return (
     <AppShell
       activeView={activeView}
-      onNavigate={setActiveView}
-      title={activeView === 'log' ? 'Log a drink' : placeholder?.title ?? 'Home'}
+      onNavigate={navigate}
+      title={activeView === 'log' ? 'Log a drink' : activeView === 'settings' ? 'Settings' : placeholder?.title ?? 'Home'}
     >
-      {activeView === 'log' ? <LogPage /> : placeholder ? (
+      {/* Keep only the Log view mounted offscreen so its local draft survives navigation. */}
+      <div hidden={activeView !== 'log'} inert={activeView !== 'log'}>
+        {hasVisitedLog && (
+          <LogPage
+            key={draftKey}
+            currency={currency}
+            timeZone={reportingTimeZone}
+            headingId={activeView === 'log' ? 'view-heading' : 'log-view-heading'}
+            draftWasReset={draftPreferences.wasReset}
+          />
+        )}
+      </div>
+      {activeView === 'settings' ? <PreferencesPage hasLogDraft={hasVisitedLog} /> : placeholder ? (
         <section className="view-placeholder" aria-labelledby="view-heading">
           <div className="view-placeholder__content">
             <span className="view-placeholder__icon">
@@ -62,7 +82,7 @@ function App() {
             <button
               className="app-action"
               type="button"
-              onClick={() => setActiveView('home')}
+              onClick={() => navigate('home')}
             >
               <Icon name="arrow-left" size={18} />
               Back to Home
@@ -77,9 +97,9 @@ function App() {
             </ul>
           </div>
         </section>
-      ) : (
+      ) : activeView === 'home' ? (
         <DashboardPage />
-      )}
+      ) : null}
     </AppShell>
   )
 }
