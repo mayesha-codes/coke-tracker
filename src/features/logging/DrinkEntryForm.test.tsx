@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DrinkEntryForm from './DrinkEntryForm'
+import type { PersonalNutritionSetup } from '../../app/session/sessionState'
 import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
 
 afterEach(cleanup)
@@ -24,6 +25,7 @@ function renderForm(options: {
   references?: readonly NutritionCatalogReference[]
   timeZone?: string
   initialLocalDateTime?: string
+  personalNutrition?: PersonalNutritionSetup | null
 } = {}) {
   const user = userEvent.setup()
   render(<DrinkEntryForm
@@ -32,6 +34,7 @@ function renderForm(options: {
     timeZone={options.timeZone ?? 'Asia/Dhaka'}
     initialLocalDateTime={options.initialLocalDateTime ?? '2026-11-08T00:05'}
     draftId="test-draft-id"
+    personalNutrition={options.personalNutrition}
   />)
   return user
 }
@@ -55,7 +58,7 @@ function metricText(name: string): string {
 }
 
 async function selectReference(user: ReturnType<typeof userEvent.setup>) {
-  await user.selectOptions(screen.getByRole('combobox', { name: 'Nutrition reference' }), 'illustrative-product')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Nutrition reference' }), JSON.stringify(['reviewed', 'illustrative-product', 1]))
 }
 
 describe('DrinkEntryForm controls and draft preview', () => {
@@ -126,10 +129,10 @@ describe('DrinkEntryForm controls and draft preview', () => {
   it('shows valid volume but unavailable nutrition when no reviewed references exist', async () => {
     const user = renderForm({ references: [] })
     expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' }).disabled).toBe(true)
-    expect(screen.getByText('Reviewed product data is needed')).toBeDefined()
+    expect(screen.getByText('Nutrition setup is needed')).toBeDefined()
     expect(metricText('Volume')).toContain('330 ml')
-    expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
-    expect(metricText('Coke-only calories')).toContain('Choose a reviewed nutrition reference')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(metricText('Coke-only calories')).toContain('Choose a nutrition reference')
     await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
     expect(metricText('Volume')).toContain('660 ml')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
@@ -137,7 +140,7 @@ describe('DrinkEntryForm controls and draft preview', () => {
 
   it('discloses the selected reference source and calculates nutrition only after selection', async () => {
     const user = renderForm()
-    expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
     await selectReference(user)
     expect(metricText('Estimated sugar')).toContain('34.65 g')
     expect(metricText('Coke-only calories')).toContain('138.6 kcal')
@@ -153,7 +156,7 @@ describe('DrinkEntryForm controls and draft preview', () => {
     renderForm({ references: [{ ...makeReference(), source: { label: 'Bad source', url: 'javascript:example' } }] })
     expect(screen.getByText('Nutrition reference data needs review before it can be used.')).toBeDefined()
     expect(screen.queryByRole('link', { name: 'Bad source' })).toBeNull()
-    expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
   })
 })
@@ -169,8 +172,8 @@ describe('custom serving sizes', () => {
     expect(metricText('Volume')).toContain('750 ml')
     expect(metricText('Total spending')).toContain('BDT 100.50')
     expect(priceInput().value).toBe('100.50')
-    expect(metricText('Estimated sugar')).toContain('Choose a reviewed nutrition reference')
-    expect(metricText('Coke-only calories')).toContain('Choose a reviewed nutrition reference')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(metricText('Coke-only calories')).toContain('Choose a nutrition reference')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
   })
 
@@ -378,7 +381,7 @@ describe('DrinkEntryForm validation and review', () => {
     expect(quantityInput().getAttribute('aria-invalid')).toBe('true')
     expect(quantityInput().getAttribute('aria-describedby')).toContain('logging-quantity-error')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Increase quantity' }).disabled).toBe(true)
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
   })
 
   it('allows keyboard review of valid details while Save remains disabled', async () => {
@@ -387,13 +390,13 @@ describe('DrinkEntryForm validation and review', () => {
     await user.type(priceInput(), '0')
     await user.click(quantityInput())
     await user.keyboard('{Enter}')
-    expect(screen.getByRole('status').textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('Ready to save — not saved yet.')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
     expect(screen.getByText(/Persistence will be added later/)).toBeDefined()
     expect(screen.queryByText(/^Saved successfully/i)).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
   })
 
   it('keeps review incomplete with missing references and focuses the error summary', async () => {
@@ -401,7 +404,7 @@ describe('DrinkEntryForm validation and review', () => {
     await user.type(priceInput(), '0')
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
     expect(document.activeElement?.id).toBe('logging-error-summary')
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
   })
 
@@ -413,7 +416,7 @@ describe('DrinkEntryForm validation and review', () => {
     const input = screen.getByLabelText<HTMLInputElement>('Consumption date and time')
     expect(input.getAttribute('aria-invalid')).toBe('true')
     expect(document.getElementById('logging-time-error')?.textContent).toContain('does not exist')
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
   })
 
   it('requires an occurrence choice for a repeated time and clears it when the time changes', async () => {
@@ -421,17 +424,345 @@ describe('DrinkEntryForm validation and review', () => {
     await selectReference(user)
     await user.type(priceInput(), '0')
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
     await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
-    expect(screen.getByRole('status').textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('Ready to save — not saved yet.')
     expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
 
     // Native datetime controls expose a change event rather than ordinary text typing in jsdom.
     fireEvent.change(screen.getByLabelText('Consumption date and time'), { target: { value: '2026-11-01T01:45' } })
     expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(false)
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('')
+  })
+})
+
+// Personal references remain illustrative fixtures, never production nutrition defaults.
+function makePersonalSetup(version = 1, overrides: Partial<NutritionCatalogReference> = {}) {
+  return {
+    kind: 'user-provided' as const,
+    reference: {
+      ...makeReference(),
+      id: 'personal-label',
+      version,
+      productDescription: 'Illustrative personal can',
+      source: { label: 'Illustrative personal label', url: 'https://example.invalid/personal-label' },
+      ...overrides,
+    },
+  } satisfies PersonalNutritionSetup
+}
+
+function nutritionKey(setup: PersonalNutritionSetup) {
+  return JSON.stringify([setup.kind, setup.reference.id, setup.reference.version])
+}
+
+function nutritionInput() {
+  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' })
+}
+
+function reviewStatus() {
+  return screen.getByRole('status', { name: 'Review status' })
+}
+
+function renderPersonalForm(
+  personalNutrition: PersonalNutritionSetup | null = makePersonalSetup(),
+  options: { timeZone?: string; initialLocalDateTime?: string; references?: readonly NutritionCatalogReference[] } = {},
+) {
+  const user = userEvent.setup()
+  const props = {
+    references: options.references ?? [],
+    currency: 'BDT',
+    timeZone: options.timeZone ?? 'Asia/Dhaka',
+    initialLocalDateTime: options.initialLocalDateTime ?? '2026-11-08T00:05',
+    draftId: 'personal-form-draft',
+  }
+  const view = render(<DrinkEntryForm {...props} personalNutrition={personalNutrition} />)
+  return {
+    user,
+    updatePersonal: (latest: PersonalNutritionSetup | null) => {
+      view.rerender(<DrinkEntryForm {...props} personalNutrition={latest} />)
+    },
+  }
+}
+
+describe('explicit personal nutrition selection', () => {
+  it('offers personal values without selecting them or showing estimates automatically', () => {
+    renderPersonalForm()
+    expect(nutritionInput().disabled).toBe(false)
+    expect(nutritionInput().value).toBe('')
+    expect(within(nutritionInput()).getByRole('option', { name: /Illustrative personal can/ })).toBeDefined()
+    expect(metricText('Volume')).toContain('330 ml')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(metricText('Coke-only calories')).toContain('Choose a nutrition reference')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('uses selected per-100-ml rates for two 330 ml drinks and discloses their personal source', async () => {
+    const setup = makePersonalSetup()
+    const { user } = renderPersonalForm(setup)
+    await user.selectOptions(nutritionInput(), nutritionKey(setup))
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    expect(metricText('Volume')).toContain('660 ml')
+    expect(metricText('Estimated sugar')).toContain('69.3 g')
+    expect(metricText('Coke-only calories')).toContain('277.2 kcal')
+    const preview = screen.getByRole('region', { name: 'Draft preview' })
+    expect(within(preview).getByText('User-provided — not independently verified.')).toBeDefined()
+    expect(screen.getAllByText(/Version 1/).length).toBeGreaterThan(0)
+    const source = screen.getByRole('link', { name: 'Illustrative personal label' })
+    expect(source.getAttribute('href')).toBe('https://example.invalid/personal-label')
+    expect(source.getAttribute('rel')).toContain('noopener')
+    expect(source.getAttribute('rel')).toContain('noreferrer')
+  })
+
+  it('shows explicit zero rates as zero estimates rather than unavailable values', async () => {
+    const setup = makePersonalSetup(1, { sugarGramsPer100Ml: 0, kcalPer100Ml: 0 })
+    const { user } = renderPersonalForm(setup)
+    await user.selectOptions(nutritionInput(), nutritionKey(setup))
+    expect(metricText('Estimated sugar')).toContain('0 g')
+    expect(metricText('Coke-only calories')).toContain('0 kcal')
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it.each([
+    ['negative sugar', { sugarGramsPer100Ml: -1 }],
+    ['nonfinite calories', { kcalPer100Ml: Infinity }],
+    ['missing description', { productDescription: '' }],
+    ['invalid version', { version: 0 }],
+    ['unsafe source link', { source: { label: 'Unsafe personal source', url: 'javascript:example' } }],
+  ] satisfies [string, Partial<NutritionCatalogReference>][])(
+    'rejects personal values with %s without displaying their estimates or unsafe source', (_, overrides) => {
+      renderPersonalForm(makePersonalSetup(1, overrides))
+      expect(nutritionInput().disabled).toBe(true)
+      expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+      expect(metricText('Coke-only calories')).toContain('Choose a nutrition reference')
+      expect(screen.queryByRole('link', { name: 'Unsafe personal source' })).toBeNull()
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    },
+  )
+
+  it('does not let a malformed personal setup claim reviewed provenance', () => {
+    const malformed = { ...makePersonalSetup(), kind: 'reviewed' } as unknown as PersonalNutritionSetup
+    renderPersonalForm(malformed)
+    expect(nutritionInput().disabled).toBe(true)
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(screen.queryByRole('link', { name: 'Illustrative personal label' })).toBeNull()
+  })
+
+  it('keeps valid volume and known spending when a selected reference overflows nutrition calculations', async () => {
+    const setup = makePersonalSetup(1, { kcalPer100Ml: Number.MAX_VALUE })
+    const { user } = renderPersonalForm(setup)
+    await user.type(priceInput(), '100.50')
+    await user.selectOptions(nutritionInput(), nutritionKey(setup))
+    expect(metricText('Volume')).toContain('330 ml')
+    expect(metricText('Total spending')).toContain('BDT 100.50')
+    expect(metricText('Estimated sugar')).toContain('unavailable')
+    expect(metricText('Coke-only calories')).toContain('unavailable')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('keeps reviewed and personal options distinct even when their IDs and versions match', async () => {
+    const setup = makePersonalSetup(1, { id: 'illustrative-product', sugarGramsPer100Ml: 0, kcalPer100Ml: 0 })
+    const { user } = renderPersonalForm(setup, { references: [makeReference()] })
+    await selectReference(user)
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    await user.selectOptions(nutritionInput(), nutritionKey(setup))
+    expect(metricText('Estimated sugar')).toContain('0 g')
+    expect(nutritionInput().value).toBe(nutritionKey(setup))
+  })
+
+  it('does not mutate or freeze supplied references and owns an independent selected copy', async () => {
+    const setup = makePersonalSetup()
+    const before = structuredClone(setup)
+    const { user, updatePersonal } = renderPersonalForm(setup)
+    await user.selectOptions(nutritionInput(), nutritionKey(setup))
+    expect(setup).toEqual(before)
+    expect(Object.isFrozen(setup.reference)).toBe(false)
+    expect(Object.isFrozen(setup.reference.source)).toBe(false)
+    setup.reference.sugarGramsPer100Ml = 0
+    setup.reference.kcalPer100Ml = 0
+    expect(Reflect.set(setup.reference.source, 'label', 'Caller changed this source later')).toBe(true)
+    updatePersonal(setup)
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    expect(screen.getByRole('link', { name: 'Illustrative personal label' })).toBeDefined()
+    expect(screen.queryByRole('link', { name: 'Caller changed this source later' })).toBeNull()
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+  })
+
+  it('does not silently select the first setup published while an existing draft is being edited', async () => {
+    const { user, updatePersonal } = renderPersonalForm(null)
+    await user.type(priceInput(), '42.50')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    updatePersonal(makePersonalSetup())
+    expect(nutritionInput().disabled).toBe(false)
+    expect(nutritionInput().value).toBe('')
+    expect(quantityInput().value).toBe('2')
+    expect(priceInput().value).toBe('42.50')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+  })
+})
+
+describe('pinned personal nutrition versions and explicit adoption', () => {
+  it('keeps the selected version, source, estimates, Review, and focus unchanged when newer values arrive', async () => {
+    const first = makePersonalSetup()
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    await user.click(priceInput())
+    updatePersonal(makePersonalSetup(2, { sugarGramsPer100Ml: 11, kcalPer100Ml: 43 }))
+    expect(document.activeElement).toBe(priceInput())
+    expect(nutritionInput().value).toBe(nutritionKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Use latest values' }).getAttribute('type')).toBe('button')
+  })
+
+  it('adopts the latest version with the keyboard, clears Review, and returns focus to the nutrition control', async () => {
+    const first = makePersonalSetup()
+    const second = makePersonalSetup(2, { sugarGramsPer100Ml: 11, kcalPer100Ml: 43 })
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updatePersonal(second)
+    await user.click(nutritionInput())
+    await user.tab()
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Illustrative personal label' }))
+    await user.tab()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Use latest values' }))
+    await user.keyboard('{Enter}')
+    expect(nutritionInput().value).toBe(nutritionKey(second))
+    expect(metricText('Estimated sugar')).toContain('36.3 g')
+    expect(metricText('Coke-only calories')).toContain('141.9 kcal')
+    expect(reviewStatus().textContent).toBe('')
+    expect(document.activeElement).toBe(nutritionInput())
+    expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('preserves exact custom text, quantity, cached unknown price, and repeated-time choice during adoption', async () => {
+    const first = makePersonalSetup()
+    const { user, updatePersonal } = renderPersonalForm(first, {
+      timeZone: 'America/New_York', initialLocalDateTime: '2026-11-01T01:30',
+    })
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    await user.type(customSizeInput(), ' 00375 ')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    await user.type(priceInput(), '123.45')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    updatePersonal(makePersonalSetup(2, { sugarGramsPer100Ml: 11, kcalPer100Ml: 43 }))
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Custom' }).checked).toBe(true)
+    expect(customSizeInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('2')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Price unknown' }).checked).toBe(true)
+    expect(priceInput().disabled).toBe(true)
+    expect(screen.getByLabelText<HTMLInputElement>('Consumption date and time').value).toBe('2026-11-01T01:30')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
+    expect(metricText('Volume')).toContain('750 ml')
+    expect(metricText('Estimated sugar')).toContain('82.5 g')
+    expect(metricText('Coke-only calories')).toContain('322.5 kcal')
+    expect(metricText('Total spending')).toContain('Unknown')
+    expect(reviewStatus().textContent).toBe('')
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('123.45')
+    expect(metricText('Total spending')).toContain('BDT 123.45')
+  })
+
+  it('treats source-only revisions as an update while retaining the old source until adoption', async () => {
+    const first = makePersonalSetup()
+    const second = makePersonalSetup(2, {
+      source: { label: 'Corrected illustrative personal source', url: 'https://example.invalid/corrected' },
+    })
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updatePersonal(second)
+    expect(screen.getByRole('link', { name: 'Illustrative personal label' })).toBeDefined()
+    expect(screen.queryByRole('link', { name: 'Corrected illustrative personal source' })).toBeNull()
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(screen.getByRole('link', { name: 'Corrected illustrative personal source' }).getAttribute('href'))
+      .toBe('https://example.invalid/corrected')
+    expect(nutritionInput().value).toBe(nutritionKey(second))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(reviewStatus().textContent).toBe('')
+  })
+
+  it('skips intervening revisions and adopts the newest available version', async () => {
+    const first = makePersonalSetup()
+    const latest = makePersonalSetup(4, { sugarGramsPer100Ml: 13, kcalPer100Ml: 45 })
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    updatePersonal(makePersonalSetup(2, { sugarGramsPer100Ml: 11 }))
+    updatePersonal(makePersonalSetup(3, { sugarGramsPer100Ml: 12 }))
+    updatePersonal(latest)
+    expect(nutritionInput().value).toBe(nutritionKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(nutritionInput().value).toBe(nutritionKey(latest))
+    expect(metricText('Estimated sugar')).toContain('42.9 g')
+    updatePersonal(makePersonalSetup(5, { sugarGramsPer100Ml: 14 }))
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    expect(nutritionInput().value).toBe(nutritionKey(latest))
+  })
+
+  it('does not show an update for unchanged normalized submissions or replace the selected snapshot', async () => {
+    const first = makePersonalSetup()
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updatePersonal(makePersonalSetup())
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(nutritionInput().value).toBe(nutritionKey(first))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+  })
+
+  it('rejects an invalid latest reference without invalidating the selected older version', async () => {
+    const first = makePersonalSetup()
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updatePersonal(makePersonalSetup(2, { source: { label: 'Unsafe new source', url: 'javascript:example' } }))
+    expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Unsafe new source' })).toBeNull()
+    expect(nutritionInput().value).toBe(nutritionKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+  })
+
+  it('clears nutrition only on explicit deselection and allows selecting the latest values afterward', async () => {
+    const first = makePersonalSetup()
+    const latest = makePersonalSetup(2, { sugarGramsPer100Ml: 11 })
+    const { user, updatePersonal } = renderPersonalForm(first)
+    await user.selectOptions(nutritionInput(), nutritionKey(first))
+    updatePersonal(latest)
+    await user.selectOptions(nutritionInput(), '')
+    expect(nutritionInput().value).toBe('')
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    await user.selectOptions(nutritionInput(), nutritionKey(latest))
+    expect(metricText('Estimated sugar')).toContain('36.3 g')
+    expect(nutritionInput().value).toBe(nutritionKey(latest))
   })
 })

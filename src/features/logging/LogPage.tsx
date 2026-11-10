@@ -1,5 +1,6 @@
 import { TZDateMini } from '@date-fns/tz'
 import { useState } from 'react'
+import type { PersonalNutritionSetup } from '../../app/session/sessionState'
 import Icon from '../../components/ui/Icon'
 import { DEFAULT_TRACKING_SETTINGS } from '../../domain/types'
 import type { CurrencyCode, NutritionCatalogReference, UtcTimestamp } from '../../domain/types'
@@ -11,6 +12,7 @@ const reviewedReferences: readonly NutritionCatalogReference[] = Object.freeze([
 
 type LogPageProps = {
   references?: readonly NutritionCatalogReference[]
+  personalNutrition?: PersonalNutritionSetup | null
   currency?: CurrencyCode
   timeZone?: string
   /** Injectable UI initialization values keep component tests independent of the clock. */
@@ -34,6 +36,7 @@ function localInputValue(reference: UtcTimestamp, timeZone: string): string {
 /** The production catalog remains empty until actual product-label data is reviewed. */
 function LogPage({
   references = reviewedReferences,
+  personalNutrition = null,
   currency = DEFAULT_TRACKING_SETTINGS.currency,
   timeZone = DEFAULT_TRACKING_SETTINGS.reportingTimeZone,
   initialReferenceUtc,
@@ -77,6 +80,7 @@ function LogPage({
       <section className="logging-card" aria-label="Drink entry form">
         <DrinkEntryForm
           references={references}
+          personalNutrition={personalNutrition}
           currency={currency}
           timeZone={timeZone}
           initialLocalDateTime={initialTime}

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FocusEvent, FormEvent } from 'react'
+import type { NutritionProvenance, PersonalNutritionSetup } from '../../app/session/sessionState'
 import { createNutritionReference } from '../../domain/nutrition'
 import { SERVING_PRESETS } from '../../domain/servings'
 import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
-import { isIdentifier } from '../../domain/validation'
+import { isIdentifier, isRecord } from '../../domain/validation'
 import ConsumptionTimeField from './ConsumptionTimeField'
 import DrinkPreview from './DrinkPreview.tsx'
 import { positiveIntegerFromText, prepareDrinkEntry } from './drinkDraft'
@@ -12,6 +13,7 @@ import { deriveDrinkPreview } from './drinkPreview.ts'
 import { resolveLocalDateTime } from './localDateTime'
 import type { LocalTimeChoice } from './localDateTime'
 import NutritionReferenceField from './NutritionReferenceField'
+import type { NutritionReferenceOption } from './NutritionReferenceField'
 import PriceField from './PriceField'
 import QuantityField from './QuantityField'
 import ServingSizeField from './ServingSizeField'
@@ -19,6 +21,7 @@ import type { ServingSizeSelection } from './ServingSizeField'
 
 type DrinkEntryFormProps = {
   references: readonly NutritionCatalogReference[]
+  personalNutrition?: PersonalNutritionSetup | null
   currency: CurrencyCode
   timeZone: string
   initialLocalDateTime: string
@@ -26,6 +29,17 @@ type DrinkEntryFormProps = {
 }
 
 type ControlField = 'serving' | 'quantity' | 'price' | 'time' | 'reference'
+
+/** Selection identity includes provenance and version; an ID alone cannot pin historical values. */
+function selectionKey(selection: NutritionProvenance): string {
+  return JSON.stringify([selection.kind, selection.reference.id, selection.reference.version])
+}
+
+/** Own a validated, deeply frozen reference rather than retaining caller-owned catalog objects. */
+function captureSelection(kind: NutritionProvenance['kind'], reference: unknown): NutritionProvenance | null {
+  const checked = createNutritionReference(reference)
+  return checked.valid === true ? Object.freeze({ kind, reference: checked.reference }) : null
+}
 
 function controlField(field: DrinkDraftIssueField): ControlField | null {
   if (field === 'servingMlText') return 'serving'
@@ -51,6 +65,7 @@ function selectorForIssue(field: DrinkDraftIssueField, servingSelection: Serving
 /** Local, unsaved form state. Reviewing prepares data but never stores an entry. */
 function DrinkEntryForm({
   references,
+  personalNutrition = null,
   currency,
   timeZone,
   initialLocalDateTime,
@@ -63,7 +78,7 @@ function DrinkEntryForm({
   const [knownPriceText, setKnownPriceText] = useState('')
   const [localDateTime, setLocalDateTime] = useState(initialLocalDateTime)
   const [choice, setChoice] = useState<LocalTimeChoice>()
-  const [referenceId, setReferenceId] = useState('')
+  const [selectedNutrition, setSelectedNutrition] = useState<NutritionProvenance | null>(null)
   const [touched, setTouched] = useState<Partial<Record<ControlField, boolean>>>({})
   const [reviewCount, setReviewCount] = useState(0)
   const [reviewStatus, setReviewStatus] = useState('')
@@ -75,16 +90,34 @@ function DrinkEntryForm({
   const servingMlText = servingSelection === 'custom' ? customMlText
     : selectedPreset === undefined ? '' : String(selectedPreset.servingMl)
 
-  const checkedReferences = references.map(reference => createNutritionReference(reference))
-  const validReferences: NutritionCatalogReference[] = []
+  const availableSelections: NutritionProvenance[] = []
   let catalogError: string | undefined
-  for (const checked of checkedReferences) {
-    if (checked.valid === true) validReferences.push(checked.reference)
+  for (const reference of references) {
+    const checked = captureSelection('reviewed', reference)
+    if (checked !== null) availableSelections.push(checked)
     else catalogError = 'Nutrition reference data needs review before it can be used.'
   }
-  const selectedReference = catalogError === undefined
-    ? validReferences.find(reference => reference.id === referenceId)
-    : undefined
+  // Personal input cannot promote itself into the separately supplied reviewed catalog.
+  const latestPersonal = isRecord(personalNutrition) && personalNutrition.kind === 'user-provided'
+    ? captureSelection('user-provided', personalNutrition.reference) : null
+  if (latestPersonal !== null) availableSelections.push(latestPersonal)
+  else if (personalNutrition !== null) catalogError = 'Nutrition reference data needs review before it can be used.'
+
+  const selectedKey = selectedNutrition === null ? '' : selectionKey(selectedNutrition)
+  const referenceOptions: NutritionReferenceOption[] = availableSelections.map(nutrition => ({
+    value: selectionKey(nutrition),
+    // Preserve both the option label and full details if a caller changes data
+    // without changing its identity. The draft continues to own its earlier copy.
+    nutrition: selectedNutrition !== null && selectionKey(nutrition) === selectedKey ? selectedNutrition : nutrition,
+  }))
+  if (selectedNutrition !== null && !referenceOptions.some(option => option.value === selectedKey)) {
+    referenceOptions.push({ value: selectedKey, nutrition: selectedNutrition })
+  }
+  const updateAvailable = selectedNutrition?.kind === 'user-provided' && latestPersonal !== null
+    && selectedNutrition.reference.id === latestPersonal.reference.id
+    && latestPersonal.reference.version > selectedNutrition.reference.version
+  // This frozen selection, not an ID lookup in the latest setup, drives all estimates and Review.
+  const selectedReference = selectedNutrition?.reference
 
   const draft: DrinkDraft = {
     servingMlText,
@@ -119,9 +152,9 @@ function DrinkEntryForm({
     }
     collectedIssues.push({
       field: 'nutritionReference',
-      message: catalogError ?? (validReferences.length === 0
-        ? 'A reviewed nutrition reference is needed before the entry can be ready to save.'
-        : 'Choose a reviewed nutrition reference.'),
+      message: catalogError ?? (availableSelections.length === 0
+        ? 'A nutrition reference is needed before the entry can be ready to save.'
+        : 'Choose a nutrition reference.'),
     })
   }
   const issues = collectedIssues.filter((issue, index, all) =>
@@ -145,8 +178,22 @@ function DrinkEntryForm({
     setReviewStatus('')
   }
 
+  function selectNutrition(value: string) {
+    changed()
+    setSelectedNutrition(referenceOptions.find(option => option.value === value)?.nutrition ?? null)
+  }
+
+  function useLatestNutrition() {
+    if (!updateAvailable || latestPersonal === null) return
+    changed()
+    setSelectedNutrition(latestPersonal)
+    // The adoption button disappears after this commit; return focus to the stable select.
+    pendingFocus.current = '#logging-reference'
+  }
+
   function fieldError(field: ControlField): string | undefined {
-    if (field === 'reference' && catalogError !== undefined) return catalogError
+    if (field === 'reference' && selectedNutrition === null && availableSelections.length === 0 &&
+        catalogError !== undefined) return catalogError
     if (reviewCount === 0 && !touched[field]) return undefined
     const fieldIssues = issues.filter(issue => controlField(issue.field) === field)
     if (field === 'serving' && servingSelection === 'custom' && fieldIssues.length > 0 &&
@@ -231,8 +278,9 @@ function DrinkEntryForm({
               setChoice(undefined)
             }} onChoiceChange={value => { changed(); setChoice(value) }} />
 
-          <NutritionReferenceField references={validReferences} value={referenceId} error={fieldError('reference')}
-            onChange={value => { changed(); setReferenceId(value) }} />
+          <NutritionReferenceField options={referenceOptions} selected={selectedNutrition} value={selectedKey}
+            error={fieldError('reference')} onChange={selectNutrition}
+            updateAvailable={updateAvailable} onUseLatest={useLatestNutrition} />
 
           <div className="logging-form__actions">
             <button className="logging-button logging-button--primary" type="submit">Review entry</button>
@@ -242,10 +290,10 @@ function DrinkEntryForm({
           <p className="logging-help" id="logging-save-explanation">
             Saving is not available yet. Persistence will be added later; reviewing this draft does not save an entry.
           </p>
-          <p className="logging-review-status" role="status">{reviewStatus}</p>
+          <p className="logging-review-status" role="status" aria-label="Review status">{reviewStatus}</p>
         </div>
 
-        <DrinkPreview preview={preview} currency={currency} />
+        <DrinkPreview preview={preview} currency={currency} nutritionSelection={selectedNutrition} />
       </div>
     </form>
   )

@@ -190,7 +190,7 @@ function PersonalNutritionSetup() {
           <p className="personal-nutrition-help">Edits create a new version when values or source details change. Existing drink records keep their original snapshots.</p>
         </section>
       )}
-      <p className="personal-nutrition-session-note">This reusable setup is temporary and clears on refresh. Connecting it to the Log form comes next; saving drinks is still unavailable.</p>
+      <p className="personal-nutrition-session-note">This reusable setup is temporary and clears on refresh. Choose it explicitly in Log to preview estimates. Existing drafts keep their selected version until you choose newer values; saving drinks is still unavailable.</p>
     </section>
   )
 }

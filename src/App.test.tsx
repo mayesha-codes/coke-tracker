@@ -9,8 +9,18 @@ import { createSessionState, transitionSession } from './app/session/sessionStat
 import type { SessionState } from './app/session/sessionState'
 import { createDrinkEntry } from './domain/entries'
 import type { TrackingSettings } from './domain/types'
+import type { PersonalNutritionDraft } from './features/nutrition/nutritionInput'
 
 const referenceTime = '2026-11-08T09:30:00.000Z'
+
+// Illustrative label data for integration tests only, never production defaults.
+const illustrativeNutrition: PersonalNutritionDraft = {
+  productDescription: 'Illustrative personal can',
+  sugarGramsPer100MlText: '10.5',
+  kcalPer100MlText: '42',
+  sourceDescription: 'Illustrative package label',
+  sourceUrl: 'https://example.invalid/personal-label',
+}
 
 beforeEach(() => {
   // Only the clock is fixed: user-event still uses real timers.
@@ -68,6 +78,45 @@ function dateTimeInput() {
 
 function customServingInput() {
   return screen.getByLabelText<HTMLInputElement>('Custom serving size (ml)')
+}
+
+function nutritionSelect() {
+  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' })
+}
+
+function reviewStatus() {
+  return screen.getByRole('status', { name: 'Review status' })
+}
+
+function previewMetric(name: string): string {
+  const preview = screen.getByRole('region', { name: 'Draft preview' })
+  return within(preview).getByText(name, { selector: 'dt' }).parentElement?.textContent?.replace(/\s+/g, ' ') ?? ''
+}
+
+function personalState(preferences: TrackingSettings = {
+  currency: 'JPY', reportingTimeZone: 'Asia/Tokyo', dailyLimitMl: null,
+}): SessionState {
+  const result = transitionSession(makeState(preferences), {
+    type: 'apply-personal-nutrition', id: 'illustrative-personal-label', draft: illustrativeNutrition,
+  })
+  if (result.outcome !== 'accepted') throw new Error('Expected a valid illustrative personal setup.')
+  return result.state
+}
+
+function fillNutritionSettings(changes: Partial<PersonalNutritionDraft> = {}) {
+  const draft = { ...illustrativeNutrition, ...changes }
+  const labels = {
+    productDescription: 'Product description', sugarGramsPer100MlText: 'Sugar (g per 100 ml)',
+    kcalPer100MlText: 'Calories (kcal per 100 ml)', sourceDescription: 'Source description',
+    sourceUrl: 'Source URL (optional)',
+  } as const
+  for (const field of Object.keys(labels) as (keyof typeof labels)[]) {
+    fireEvent.change(screen.getByLabelText(labels[field]), { target: { value: draft[field] ?? '' } })
+  }
+}
+
+async function selectPersonalNutrition(user: ReturnType<typeof userEvent.setup>, version = 1) {
+  await user.selectOptions(nutritionSelect(), JSON.stringify(['user-provided', 'illustrative-personal-label', version]))
 }
 
 async function navigate(user: ReturnType<typeof userEvent.setup>, view: 'Home' | 'Log' | 'History' | 'Settings') {
@@ -389,6 +438,219 @@ describe('historical data through preferences and navigation', () => {
     await navigate(user, 'Home')
     expect(screen.getByTestId('test-session-history').textContent).toBe(before)
     expect(added.state.entries[0].entry.servingMl).toBe(330)
+    expect(added.state.entries[0].nutritionProvenance.kind).toBe('user-provided')
+  })
+})
+
+describe('personal nutrition selection in retained Log drafts', () => {
+  it('keeps an existing custom draft and repeated-time choice when personal nutrition is first configured', async () => {
+    const initialState = makeState({ currency: 'JPY', reportingTimeZone: 'America/New_York', dailyLimitMl: null })
+    const { user } = renderApp({ initialState })
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '300')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    fireEvent.change(dateTimeInput(), { target: { value: '2026-11-01T01:30' } })
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+
+    await navigate(user, 'Settings')
+    fillNutritionSettings()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toContain('Version 1')
+    for (const view of ['History', 'Home', 'Log'] as const) await navigate(user, view)
+
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Custom' }).checked).toBe(true)
+    expect(customServingInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(priceInput().value).toBe('300')
+    expect(priceInput().disabled).toBe(true)
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Price unknown' }).checked).toBe(true)
+    expect(dateTimeInput().value).toBe('2026-11-01T01:30')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
+    expect(nutritionSelect().disabled).toBe(false)
+    expect(nutritionSelect().value).toBe('')
+    expect(previewMetric('Volume')).toContain('750 ml')
+    expect(previewMetric('Estimated sugar')).toContain('Choose a nutrition reference to see estimates.')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('300')
+  })
+
+  it('pins a version-one selection after Review until explicit adoption and preserves every other draft field', async () => {
+    const initialState = personalState({ currency: 'JPY', reportingTimeZone: 'America/New_York', dailyLimitMl: null })
+    const { user } = renderApp({ initialState })
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '300')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    fireEvent.change(dateTimeInput(), { target: { value: '2026-11-01T01:30' } })
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(previewMetric('Estimated sugar')).toContain('78.75 g')
+    expect(previewMetric('Coke-only calories')).toContain('315 kcal')
+
+    await navigate(user, 'Settings')
+    fillNutritionSettings({ sugarGramsPer100MlText: '11', kcalPer100MlText: '43' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 1]))
+    expect(previewMetric('Estimated sugar')).toContain('78.75 g')
+    expect(previewMetric('Coke-only calories')).toContain('315 kcal')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+
+    screen.getByRole('button', { name: 'Use latest values' }).focus()
+    await user.keyboard('{Enter}')
+    expect(document.activeElement).toBe(nutritionSelect())
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 2]))
+    expect(previewMetric('Estimated sugar')).toContain('82.5 g')
+    expect(previewMetric('Coke-only calories')).toContain('322.5 kcal')
+    expect(reviewStatus().textContent).toBe('')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Custom' }).checked).toBe(true)
+    expect(customServingInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(priceInput().disabled).toBe(true)
+    expect(priceInput().value).toBe('300')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Price unknown' }).checked).toBe(true)
+    expect(dateTimeInput().value).toBe('2026-11-01T01:30')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('300')
+  })
+
+  it('requires explicit adoption of a source-only revision even when its numeric estimates are unchanged', async () => {
+    const { user } = renderApp({ initialState: personalState() })
+    await navigate(user, 'Log')
+    await user.type(priceInput(), '0')
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    const sugarBefore = previewMetric('Estimated sugar')
+    await navigate(user, 'Settings')
+    fillNutritionSettings({ sourceDescription: 'Corrected illustrative source', sourceUrl: 'https://example.invalid/corrected' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    expect(document.querySelector('.logging-reference-details')?.textContent).toContain('Illustrative package label')
+    expect(document.querySelector('.logging-reference-details')?.textContent).not.toContain('Corrected illustrative source')
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    expect(previewMetric('Estimated sugar')).toBe(sugarBefore)
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(document.querySelector('.logging-reference-details')?.textContent).toContain('Corrected illustrative source')
+    expect(previewMetric('Estimated sugar')).toBe(sugarBefore)
+    expect(reviewStatus().textContent).toBe('')
+    expect(priceInput().value).toBe('0')
+  })
+
+  it('adopts the newest available revision after multiple Settings applications', async () => {
+    const { user } = renderApp({ initialState: personalState() })
+    await navigate(user, 'Log')
+    await selectPersonalNutrition(user)
+    await navigate(user, 'Settings')
+    fillNutritionSettings({ sugarGramsPer100MlText: '11' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    fillNutritionSettings({ sugarGramsPer100MlText: '12' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 1]))
+    expect(previewMetric('Estimated sugar')).toContain('34.65 g')
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 3]))
+    expect(previewMetric('Estimated sugar')).toContain('39.6 g')
+    expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
+  })
+
+  it('keeps the selected version and Review after normalized unchanged and rejected Settings submissions', async () => {
+    const { user } = renderApp({ initialState: personalState() })
+    await navigate(user, 'Log')
+    await user.type(priceInput(), '100')
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    await navigate(user, 'Settings')
+    fillNutritionSettings({
+      productDescription: ' Illustrative personal can ', sugarGramsPer100MlText: '010.5000', kcalPer100MlText: '042.00',
+      sourceDescription: ' Illustrative package label ', sourceUrl: ' https://example.invalid/personal-label ',
+    })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    expect(screen.getByRole('status', { name: 'Nutrition application status' }).textContent).toContain('Version 1')
+    fillNutritionSettings({ sugarGramsPer100MlText: '-1' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    expect(screen.getByLabelText('Sugar (g per 100 ml)').getAttribute('aria-invalid')).toBe('true')
+    await navigate(user, 'Log')
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 1]))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(priceInput().value).toBe('100')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(previewMetric('Estimated sugar')).toContain('34.65 g')
+  })
+
+  it('preserves the selected nutrition and completed Review when unchanged preferences are applied', async () => {
+    const { user } = renderApp({ initialState: personalState() })
+    await navigate(user, 'Log')
+    await user.type(priceInput(), '300')
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    const selectedBefore = nutritionSelect().value
+    await navigate(user, 'Settings')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    await navigate(user, 'Log')
+    expect(nutritionSelect().value).toBe(selectedBefore)
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(priceInput().value).toBe('300')
+  })
+
+  it.each(['currency', 'timezone'] as const)('resets nutrition selection with the rest of the draft after a %s change', async change => {
+    const { user } = renderApp({ initialState: personalState() })
+    await navigate(user, 'Log')
+    await user.type(priceInput(), '300')
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    await navigate(user, 'Settings')
+    if (change === 'currency') await user.selectOptions(screen.getByRole('combobox', { name: 'Currency' }), 'USD')
+    else fireEvent.change(screen.getByLabelText('Reporting timezone', { exact: true }), { target: { value: 'UTC' } })
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    await navigate(user, 'Log')
+    expect(nutritionSelect().disabled).toBe(false)
+    expect(nutritionSelect().value).toBe('')
+    expect(reviewStatus().textContent).toBe('')
+    expect(priceInput().value).toBe('')
+    expect(quantityInput().value).toBe('1')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('preserves historical snapshots and provenance when a draft adopts a newer setup', async () => {
+    const state = personalState()
+    const setup = state.personalNutrition
+    if (setup === null) throw new Error('Expected the illustrative setup.')
+    const created = createDrinkEntry({
+      id: 'old-nutrition-entry', consumedAt: '2026-11-07T09:00:00Z', quantity: 2,
+      servingMl: 330, totalPriceMinor: 300, currency: 'JPY',
+    }, setup.reference)
+    if (created.valid === false) throw new Error('Expected a valid illustrative entry.')
+    const added = transitionSession(state, {
+      type: 'add-entry', record: { entry: created.entry, nutritionProvenance: setup },
+    })
+    if (added.outcome !== 'accepted') throw new Error('Expected valid illustrative history.')
+    const { user } = renderApp({ initialState: added.state, controls: true })
+    const historyBefore = screen.getByTestId('test-session-history').textContent
+    await navigate(user, 'Log')
+    await selectPersonalNutrition(user)
+    await navigate(user, 'Settings')
+    fillNutritionSettings({ sugarGramsPer100MlText: '11', sourceDescription: 'New illustrative package label' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(screen.getByTestId('test-session-history').textContent).toBe(historyBefore)
+    expect(added.state.entries[0].entry.nutrition.referenceVersion).toBe(1)
+    expect(added.state.entries[0].nutritionProvenance.reference.source.label).toBe('Illustrative package label')
     expect(added.state.entries[0].nutritionProvenance.kind).toBe('user-provided')
   })
 })

@@ -172,7 +172,7 @@ describe('separate preferences and personal nutrition forms', () => {
     expect(screen.getByTestId('stored-nutrition').textContent).toBe(nutritionBefore)
   })
 
-  it('retains applied personal nutrition across navigation without connecting it to Log or enabling Save', async () => {
+  it('offers applied personal nutrition in Log without silently selecting it or enabling Save', async () => {
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
     const user = userEvent.setup()
     render(<SessionProvider><App /><StoredPreferences /></SessionProvider>)
@@ -182,8 +182,12 @@ describe('separate preferences and personal nutrition forms', () => {
     const applied = screen.getByTestId('stored-nutrition').textContent
     await user.click(screen.getByRole('button', { name: 'Log' }))
     expect(screen.getByRole('button', { name: 'Save entry' }).hasAttribute('disabled')).toBe(true)
-    expect(screen.getByLabelText('Nutrition reference').hasAttribute('disabled')).toBe(true)
-    expect(screen.getByText('Reviewed product data is needed')).toBeDefined()
+    const referenceSelect = screen.getByLabelText<HTMLSelectElement>('Nutrition reference')
+    expect(referenceSelect.disabled).toBe(false)
+    expect(referenceSelect.value).toBe('')
+    expect(within(referenceSelect).getByRole('option', { name: /My illustrative can/ })).toBeDefined()
+    const preview = screen.getByRole('region', { name: 'Draft preview' })
+    expect(within(preview).getAllByText('Choose a nutrition reference to see estimates.')).toHaveLength(2)
     await user.click(screen.getByRole('button', { name: 'Settings' }))
     expect(screen.getByTestId('stored-nutrition').textContent).toBe(applied)
     expect(screen.getByLabelText<HTMLInputElement>('Product description').value).toBe('My illustrative can')

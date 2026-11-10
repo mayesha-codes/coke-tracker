@@ -89,7 +89,7 @@ export function deriveDrinkPreview(
   }
 
   let nutrition: PreviewValue<NutritionEstimate> = unavailable(
-    'Choose a reviewed nutrition reference to see estimates.',
+    'Choose a nutrition reference to see estimates.',
   )
   if (reference === undefined) {
     issues.push({ field: 'nutritionReference', message: nutrition.reason })

@@ -1,4 +1,5 @@
 import { formatMoney } from '../../domain/money'
+import type { NutritionProvenance } from '../../app/session/sessionState'
 import type { CurrencyCode } from '../../domain/types'
 import type { DrinkPreviewState, PreviewValue } from './drinkPreview.ts'
 import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
@@ -6,6 +7,7 @@ import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 interface DrinkPreviewProps {
   preview: DrinkPreviewState
   currency: CurrencyCode
+  nutritionSelection?: NutritionProvenance | null
 }
 
 function UnavailableValue({ reason }: { reason: string }) {
@@ -28,7 +30,7 @@ function NumberValue({ value, unit }: { value: PreviewValue<number>; unit: strin
   return <span className="logging-preview__value">{text} <span>{unit}</span></span>
 }
 
-function DrinkPreview({ preview, currency }: DrinkPreviewProps) {
+function DrinkPreview({ preview, currency, nutritionSelection = null }: DrinkPreviewProps) {
   const sugar = preview.nutrition.status === 'available'
     ? { status: 'available' as const, value: preview.nutrition.value.sugarGrams }
     : preview.nutrition
@@ -75,6 +77,14 @@ function DrinkPreview({ preview, currency }: DrinkPreviewProps) {
           </dd>
         </div>
       </dl>
+
+      {nutritionSelection !== null && (
+        <div className="logging-preview__nutrition-source">
+          <p>{nutritionSelection.reference.productDescription} · Version {nutritionSelection.reference.version}</p>
+          <p className="logging-reference-provenance">{nutritionSelection.kind === 'user-provided'
+            ? 'User-provided — not independently verified.' : 'Reviewed reference.'}</p>
+        </div>
+      )}
 
       <p className="logging-preview__footer">
         {currency} prices cover all selected drinks. These are draft estimates, not saved consumption.

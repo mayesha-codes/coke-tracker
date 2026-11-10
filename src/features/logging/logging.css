@@ -429,6 +429,87 @@
   overflow-wrap: anywhere;
 }
 
+.logging-reference-details,
+.logging-reference-setup,
+.logging-preview__nutrition-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.logging-reference-provenance {
+  margin: var(--space-2) 0 0;
+  color: var(--logging-accent-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.65;
+}
+
+.logging-nutrition-updates {
+  min-width: 0;
+  color: var(--logging-accent-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.logging-nutrition-updates p {
+  margin: var(--space-4) 0 0;
+}
+
+.logging-nutrition-update-action {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid rgb(227 34 53 / 28%);
+  border-radius: var(--radius-sm);
+  background: rgb(227 34 53 / 5%);
+  overflow-wrap: anywhere;
+}
+
+.logging-nutrition-update-action > .logging-help {
+  margin: 0;
+}
+
+.logging-nutrition-adopt {
+  justify-self: start;
+  min-height: 2.75rem;
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--logging-accent-text);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: rgb(227 34 53 / 12%);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) ease;
+}
+
+.logging-nutrition-adopt:hover {
+  background: rgb(227 34 53 / 22%);
+}
+
+.logging-nutrition-adopt:focus-visible {
+  outline-offset: 3px;
+}
+
+.logging-preview__nutrition-source {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgb(29 32 42 / 55%);
+  font-size: var(--text-xs);
+}
+
+.logging-preview__nutrition-source > p:first-child {
+  margin: 0;
+  color: var(--color-muted);
+}
+
 .logging-error {
   margin: var(--space-2) 0 0;
   color: var(--logging-accent-text);
@@ -644,6 +725,10 @@
 
   .logging-form__actions .logging-button {
     flex: 1 1 100%;
+  }
+
+  .logging-nutrition-adopt {
+    justify-self: stretch;
   }
 
   .logging-input[type='datetime-local'] {

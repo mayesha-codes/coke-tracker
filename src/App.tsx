@@ -60,6 +60,7 @@ function App() {
             key={draftKey}
             currency={currency}
             timeZone={reportingTimeZone}
+            personalNutrition={state.personalNutrition}
             headingId={activeView === 'log' ? 'view-heading' : 'log-view-heading'}
             draftWasReset={draftPreferences.wasReset}
           />

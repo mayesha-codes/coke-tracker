@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createNutritionReference } from '../../domain/nutrition'
 import { deriveDrinkPreview } from './drinkPreview.ts'
 import type { DrinkDraft } from './drinkDraft'
 
@@ -72,12 +73,39 @@ describe('deriveDrinkPreview', () => {
     expect(preview.issues.map(issue => issue.field)).toEqual(['nutritionReference'])
   })
 
-  it('uses the supplied reviewed reference through domain nutrition calculations without rounding', () => {
+  it('uses the supplied reference through domain nutrition calculations without rounding', () => {
     const preview = deriveDrinkPreview(makeDraft(), makeReference())
     expect(preview.nutrition.status).toBe('available')
     if (preview.nutrition.status !== 'available') throw new Error('Expected nutrition estimates.')
     expect(preview.nutrition.value.sugarGrams).toBeCloseTo(69.3, 10)
     expect(preview.nutrition.value.kcal).toBeCloseTo(277.2, 10)
+    expect(preview.issues).toEqual([])
+  })
+
+  it('uses a captured reference version even after newer personal values become available', () => {
+    const original = createNutritionReference(makeReference())
+    if (original.valid === false) throw new Error('Expected a valid illustrative reference.')
+    const updated = createNutritionReference({ ...original.reference, version: 2, sugarGramsPer100Ml: 9, kcalPer100Ml: 36 })
+    if (updated.valid === false) throw new Error('Expected a valid illustrative revision.')
+    const before = deriveDrinkPreview(makeDraft(), original.reference)
+    const stillPinned = deriveDrinkPreview(makeDraft(), original.reference)
+    expect(stillPinned.nutrition).toEqual(before.nutrition)
+    expect(stillPinned.nutrition).toEqual({ status: 'available', value: { sugarGrams: 69.3, kcal: 277.2 } })
+    const adopted = deriveDrinkPreview(makeDraft(), updated.reference)
+    expect(adopted.nutrition.status).toBe('available')
+    if (adopted.nutrition.status !== 'available') throw new Error('Expected nutrition estimates.')
+    expect(adopted.nutrition.value.sugarGrams).toBeCloseTo(59.4, 10)
+    expect(adopted.nutrition.value.kcal).toBeCloseTo(237.6, 10)
+    expect(adopted.volume).toEqual(before.volume)
+    expect(adopted.spending).toEqual(before.spending)
+    expect(original.reference.version).toBe(1)
+  })
+
+  it('accepts explicit zero nutrition rates without confusing them with unavailable estimates', () => {
+    const preview = deriveDrinkPreview(makeDraft(), { ...makeReference(), sugarGramsPer100Ml: 0, kcalPer100Ml: 0 })
+    expect(preview.nutrition).toEqual({ status: 'available', value: { sugarGrams: 0, kcal: 0 } })
+    expect(preview.volume).toEqual({ status: 'available', value: 660 })
+    expect(preview.spending.status).toBe('available')
     expect(preview.issues).toEqual([])
   })
 
