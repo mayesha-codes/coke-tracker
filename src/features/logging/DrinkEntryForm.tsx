@@ -113,9 +113,19 @@ function DrinkEntryForm({
   if (selectedNutrition !== null && !referenceOptions.some(option => option.value === selectedKey)) {
     referenceOptions.push({ value: selectedKey, nutrition: selectedNutrition })
   }
-  const updateAvailable = selectedNutrition?.kind === 'user-provided' && latestPersonal !== null
-    && selectedNutrition.reference.id === latestPersonal.reference.id
-    && latestPersonal.reference.version > selectedNutrition.reference.version
+  // Product/market identities stay distinct. Resolve only a newer version of
+  // this same source kind and ID, without changing the pinned draft selection.
+  let latestForSelection: NutritionProvenance | null = null
+  if (selectedNutrition !== null) {
+    for (const candidate of availableSelections) {
+      if (candidate.kind === selectedNutrition.kind && candidate.reference.id === selectedNutrition.reference.id &&
+          (latestForSelection === null || candidate.reference.version > latestForSelection.reference.version)) {
+        latestForSelection = candidate
+      }
+    }
+  }
+  const updateAvailable = selectedNutrition !== null && latestForSelection !== null
+    && latestForSelection.reference.version > selectedNutrition.reference.version
   // This frozen selection, not an ID lookup in the latest setup, drives all estimates and Review.
   const selectedReference = selectedNutrition?.reference
 
@@ -184,9 +194,9 @@ function DrinkEntryForm({
   }
 
   function useLatestNutrition() {
-    if (!updateAvailable || latestPersonal === null) return
+    if (!updateAvailable || latestForSelection === null) return
     changed()
-    setSelectedNutrition(latestPersonal)
+    setSelectedNutrition(latestForSelection)
     // The adoption button disappears after this commit; return focus to the stable select.
     pendingFocus.current = '#logging-reference'
   }

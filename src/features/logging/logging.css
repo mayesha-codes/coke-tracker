@@ -410,6 +410,53 @@
   font-weight: 600;
 }
 
+.logging-product-selection {
+  min-width: 0;
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.logging-nutrition-details {
+  min-width: 0;
+  margin-top: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgb(16 17 22 / 25%);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.logging-nutrition-details summary {
+  min-height: 2.75rem;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.logging-nutrition-details summary::marker {
+  color: var(--logging-accent-text);
+}
+
+.logging-nutrition-details summary:focus-visible {
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.logging-nutrition-details[open] summary {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.logging-nutrition-details .logging-reference-details {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .logging-reference-rates {
   display: flex;
   flex-wrap: wrap;

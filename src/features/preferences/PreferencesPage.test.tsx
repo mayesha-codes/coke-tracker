@@ -182,9 +182,12 @@ describe('separate preferences and personal nutrition forms', () => {
     const applied = screen.getByTestId('stored-nutrition').textContent
     await user.click(screen.getByRole('button', { name: 'Log' }))
     expect(screen.getByRole('button', { name: 'Save entry' }).hasAttribute('disabled')).toBe(true)
-    const referenceSelect = screen.getByLabelText<HTMLSelectElement>('Nutrition reference')
+    const referenceSelect = screen.getByLabelText<HTMLSelectElement>('Coke product')
     expect(referenceSelect.disabled).toBe(false)
     expect(referenceSelect.value).toBe('')
+    expect(within(referenceSelect).getByRole('group', { name: 'Reviewed products' })).toBeDefined()
+    expect(within(referenceSelect).getByRole('group', { name: 'My label values' })).toBeDefined()
+    expect(within(referenceSelect).getByRole('option', { name: /Coca-Cola Original Taste — Great Britain/ })).toBeDefined()
     expect(within(referenceSelect).getByRole('option', { name: /My illustrative can/ })).toBeDefined()
     const preview = screen.getByRole('region', { name: 'Draft preview' })
     expect(within(preview).getAllByText('Choose a nutrition reference to see estimates.')).toHaveLength(2)

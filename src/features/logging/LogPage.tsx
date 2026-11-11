@@ -6,9 +6,8 @@ import { DEFAULT_TRACKING_SETTINGS } from '../../domain/types'
 import type { CurrencyCode, NutritionCatalogReference, UtcTimestamp } from '../../domain/types'
 import { normalizeUtcTimestamp } from '../../domain/validation'
 import DrinkEntryForm from './DrinkEntryForm'
+import { REVIEWED_REFERENCES } from '../nutrition/reviewedProducts'
 import './logging.css'
-
-const reviewedReferences: readonly NutritionCatalogReference[] = Object.freeze([])
 
 type LogPageProps = {
   references?: readonly NutritionCatalogReference[]
@@ -33,9 +32,9 @@ function localInputValue(reference: UtcTimestamp, timeZone: string): string {
     `T${pad(zoned.getHours())}:${pad(zoned.getMinutes())}`
 }
 
-/** The production catalog remains empty until actual product-label data is reviewed. */
+/** Production choices come only from the explicitly reviewed, versioned registry. */
 function LogPage({
-  references = reviewedReferences,
+  references = REVIEWED_REFERENCES,
   personalNutrition = null,
   currency = DEFAULT_TRACKING_SETTINGS.currency,
   timeZone = DEFAULT_TRACKING_SETTINGS.reportingTimeZone,

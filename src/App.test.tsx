@@ -81,7 +81,7 @@ function customServingInput() {
 }
 
 function nutritionSelect() {
-  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' })
+  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
 }
 
 function reviewStatus() {
@@ -134,7 +134,8 @@ describe('shared preferences across the application views', () => {
     expect(dateTimeInput().value).toBe('2026-11-08T18:30')
     expect(screen.getByText('Asia/Tokyo', { exact: true })).toBeDefined()
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' }).disabled).toBe(false)
+    expect(nutritionSelect().value).toBe('')
   })
 
   it('retains applied preferences through Home, History, Settings, and Log navigation', async () => {
@@ -322,7 +323,8 @@ describe('custom serving drafts across application views', () => {
     expect(volumeLabel.parentElement?.textContent?.replace(/\s+/g, ' ')).toContain('750 ml')
     expect(within(preview).getByText(/JPY\s*300/)).toBeDefined()
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' }).disabled).toBe(false)
+    expect(nutritionSelect().value).toBe('')
   })
 
   it('retains cached custom text when a numeric preset is selected during navigation', async () => {
@@ -443,6 +445,40 @@ describe('historical data through preferences and navigation', () => {
 })
 
 describe('personal nutrition selection in retained Log drafts', () => {
+  it('lets a user explicitly choose the Great Britain product while retaining their custom draft and later personal fallback', async () => {
+    const { user } = renderApp()
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '300')
+    fireEvent.change(dateTimeInput(), { target: { value: '2026-11-07T20:15' } })
+    expect(nutritionSelect().value).toBe('')
+    await user.selectOptions(nutritionSelect(), JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
+    expect(previewMetric('Volume')).toContain('750 ml')
+    expect(previewMetric('Estimated sugar')).toContain('79.5 g')
+    expect(previewMetric('Coke-only calories')).toContain('315 kcal')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    await navigate(user, 'Settings')
+    fillNutritionSettings()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    for (const view of ['Home', 'History', 'Log'] as const) await navigate(user, view)
+    expect(nutritionSelect().value).toBe(JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    const personal = within(nutritionSelect()).getByRole('group', { name: 'My label values' })
+    const option = within(personal).getByRole<HTMLOptionElement>('option', { name: /Illustrative personal can/ })
+    await user.selectOptions(nutritionSelect(), option.value)
+    expect(previewMetric('Estimated sugar')).toContain('78.75 g')
+    expect(reviewStatus().textContent).toBe('')
+    expect(customServingInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(priceInput().value).toBe('300')
+    expect(dateTimeInput().value).toBe('2026-11-07T20:15')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
   it('keeps an existing custom draft and repeated-time choice when personal nutrition is first configured', async () => {
     const initialState = makeState({ currency: 'JPY', reportingTimeZone: 'America/New_York', dailyLimitMl: null })
     const { user } = renderApp({ initialState })

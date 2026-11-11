@@ -22,11 +22,56 @@ function personalSetup(): PersonalNutritionSetup {
 }
 
 describe('the preview-only Log page', () => {
-  it('provides the shell heading and an honest empty nutrition catalog', () => {
+  it('offers exactly the reviewed Great Britain product without choosing it for the user', () => {
     render(<LogPage {...initialization} />)
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
+    expect(select.disabled).toBe(false)
+    expect(select.value).toBe('')
+    const reviewed = within(select).getByRole('group', { name: 'Reviewed products' })
+    expect(within(reviewed).getAllByRole('option')).toHaveLength(1)
+    expect(within(reviewed).getByRole('option', { name: /Coca-Cola Original Taste — Great Britain/ })).toBeDefined()
+    expect(screen.getByText('Product not listed? Add your label values in Settings.')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
+  })
+
+  it('uses the documented production sugar measurement for two 330 ml drinks and keeps source details collapsed', async () => {
+    const user = userEvent.setup()
+    render(<LogPage {...initialization} />)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Coke product' }),
+      JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    const preview = screen.getByRole('region', { name: 'Draft preview' })
+    expect(within(preview).getByText('660', { exact: false })).toBeDefined()
+    expect(within(preview).getByText('69.96', { exact: false })).toBeDefined()
+    expect(within(preview).getByText('277.2', { exact: false })).toBeDefined()
+    const details = document.querySelector<HTMLDetailsElement>('details.logging-nutrition-details')
+    expect(details).not.toBeNull()
+    expect(details?.open).toBe(false)
+    // JSDOM does not model closed-details accessibility visibility; browser checks cover it.
+    await user.click(screen.getByText('Nutrition details', { selector: 'summary' }))
+    expect(details?.open).toBe(true)
+    const source = screen.getByRole('link')
+    expect(source.getAttribute('href')).toBe('https://www.coca-cola.com/gb/en/brands/coca-cola-original-taste')
+    expect(source.getAttribute('rel')).toContain('noreferrer')
+    expect(details?.textContent).toContain('Version 1')
+    expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
+  })
+
+  it.each([
+    ['JPY', 'Asia/Tokyo'], ['BDT', 'Asia/Dhaka'], ['USD', 'America/New_York'],
+  ])('keeps the product market explicit and selection blank for %s in %s', (currency, timeZone) => {
+    render(<LogPage {...initialization} currency={currency} timeZone={timeZone} />)
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
+    expect(select.value).toBe('')
+    expect(within(select).getByRole('option', { name: /Coca-Cola Original Taste — Great Britain/ })).toBeDefined()
+    expect(screen.queryByText('Ready to save — not saved yet.')).toBeNull()
+  })
+
+  it('provides the shell heading and an honest empty nutrition catalog', () => {
+    render(<LogPage {...initialization} references={[]} />)
     expect(screen.getByRole('heading', { level: 1 }).id).toBe('view-heading')
     expect(screen.getByText('Preview mode')).toBeDefined()
-    expect(screen.getByLabelText(/nutrition reference/i)).toHaveProperty('disabled', true)
+    expect(screen.getByLabelText(/coke product/i)).toHaveProperty('disabled', true)
     expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
     expect(screen.queryByText('Ready to save — not saved yet.')).toBeNull()
   })
@@ -77,8 +122,8 @@ describe('the preview-only Log page', () => {
   it('offers personal values separately from an empty reviewed catalog and requires explicit selection', async () => {
     const user = userEvent.setup()
     const personal = personalSetup()
-    render(<LogPage {...initialization} personalNutrition={personal} />)
-    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' })
+    render(<LogPage {...initialization} references={[]} personalNutrition={personal} />)
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
     expect(select.disabled).toBe(false)
     expect(select.value).toBe('')
     expect(within(select).getAllByRole('option')).toHaveLength(2)
@@ -89,6 +134,15 @@ describe('the preview-only Log page', () => {
     expect(within(preview).getByText('138.6', { exact: false })).toBeDefined()
     expect(within(preview).getByText('User-provided — not independently verified.')).toBeDefined()
     expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
+  })
+
+  it('keeps reviewed products and personal label values in distinct groups', () => {
+    render(<LogPage {...initialization} personalNutrition={personalSetup()} />)
+    const select = screen.getByRole('combobox', { name: 'Coke product' })
+    expect(within(select).getByRole('group', { name: 'Reviewed products' })).toBeDefined()
+    expect(within(select).getByRole('group', { name: 'My label values' })).toBeDefined()
+    expect(within(select).getAllByRole('option')).toHaveLength(3)
+    expect(select).toHaveProperty('value', '')
   })
 
   it('does not replace edited inputs or select nutrition when the first personal setup becomes available', async () => {
@@ -104,7 +158,7 @@ describe('the preview-only Log page', () => {
     expect(price.value).toBe('25.50')
     expect(screen.getByRole('textbox', { name: 'Quantity' })).toHaveProperty('value', '2')
     expect(screen.getByLabelText('Consumption date and time')).toHaveProperty('value', '2026-11-08T00:05')
-    expect(screen.getByRole('combobox', { name: 'Nutrition reference' })).toHaveProperty('value', '')
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).toHaveProperty('value', '')
     const preview = screen.getByRole('region', { name: 'Draft preview' })
     expect(within(preview).getByText('1,000', { exact: false })).toBeDefined()
     expect(within(preview).getAllByText('Choose a nutrition reference to see estimates.')).toHaveLength(2)

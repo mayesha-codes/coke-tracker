@@ -58,7 +58,19 @@ function metricText(name: string): string {
 }
 
 async function selectReference(user: ReturnType<typeof userEvent.setup>) {
-  await user.selectOptions(screen.getByRole('combobox', { name: 'Nutrition reference' }), JSON.stringify(['reviewed', 'illustrative-product', 1]))
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Coke product' }), JSON.stringify(['reviewed', 'illustrative-product', 1]))
+}
+
+function nutritionDetails() {
+  const summary = screen.getByText('Nutrition details', { selector: 'summary' })
+  const details = summary.closest('details')
+  if (details === null) throw new Error('Expected a native nutrition disclosure.')
+  return { summary, details }
+}
+
+async function openNutritionDetails(user: ReturnType<typeof userEvent.setup>) {
+  const { summary, details } = nutritionDetails()
+  if (!details.open) await user.click(summary)
 }
 
 describe('DrinkEntryForm controls and draft preview', () => {
@@ -128,7 +140,7 @@ describe('DrinkEntryForm controls and draft preview', () => {
 
   it('shows valid volume but unavailable nutrition when no reviewed references exist', async () => {
     const user = renderForm({ references: [] })
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' }).disabled).toBe(true)
     expect(screen.getByText('Nutrition setup is needed')).toBeDefined()
     expect(metricText('Volume')).toContain('330 ml')
     expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
@@ -144,6 +156,7 @@ describe('DrinkEntryForm controls and draft preview', () => {
     await selectReference(user)
     expect(metricText('Estimated sugar')).toContain('34.65 g')
     expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    await openNutritionDetails(user)
     expect(screen.getByRole('link', { name: 'Illustrative package label' }).getAttribute('href'))
       .toBe('https://example.invalid/label')
     expect(screen.getByText(/Reference illustrative-product · Version 1/)).toBeDefined()
@@ -156,6 +169,7 @@ describe('DrinkEntryForm controls and draft preview', () => {
     renderForm({ references: [{ ...makeReference(), source: { label: 'Bad source', url: 'javascript:example' } }] })
     expect(screen.getByText('Nutrition reference data needs review before it can be used.')).toBeDefined()
     expect(screen.queryByRole('link', { name: 'Bad source' })).toBeNull()
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
     expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
   })
@@ -459,7 +473,7 @@ function nutritionKey(setup: PersonalNutritionSetup) {
 }
 
 function nutritionInput() {
-  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Nutrition reference' })
+  return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
 }
 
 function reviewStatus() {
@@ -510,6 +524,7 @@ describe('explicit personal nutrition selection', () => {
     const preview = screen.getByRole('region', { name: 'Draft preview' })
     expect(within(preview).getByText('User-provided — not independently verified.')).toBeDefined()
     expect(screen.getAllByText(/Version 1/).length).toBeGreaterThan(0)
+    await openNutritionDetails(user)
     const source = screen.getByRole('link', { name: 'Illustrative personal label' })
     expect(source.getAttribute('href')).toBe('https://example.invalid/personal-label')
     expect(source.getAttribute('rel')).toContain('noopener')
@@ -541,6 +556,7 @@ describe('explicit personal nutrition selection', () => {
       expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
       expect(metricText('Coke-only calories')).toContain('Choose a nutrition reference')
       expect(screen.queryByRole('link', { name: 'Unsafe personal source' })).toBeNull()
+      expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
       expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
     },
   )
@@ -591,6 +607,7 @@ describe('explicit personal nutrition selection', () => {
     updatePersonal(setup)
     expect(metricText('Estimated sugar')).toContain('34.65 g')
     expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    await openNutritionDetails(user)
     expect(screen.getByRole('link', { name: 'Illustrative personal label' })).toBeDefined()
     expect(screen.queryByRole('link', { name: 'Caller changed this source later' })).toBeNull()
     expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
@@ -637,6 +654,12 @@ describe('pinned personal nutrition versions and explicit adoption', () => {
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
     updatePersonal(second)
     await user.click(nutritionInput())
+    await user.tab()
+    expect(document.activeElement).toBe(nutritionDetails().summary)
+    expect(nutritionDetails().details.open).toBe(false)
+    // JSDOM does not emulate the native summary Enter action; browser verification covers it.
+    await user.click(nutritionDetails().summary)
+    expect(nutritionDetails().details.open).toBe(true)
     await user.tab()
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Illustrative personal label' }))
     await user.tab()
@@ -695,10 +718,12 @@ describe('pinned personal nutrition versions and explicit adoption', () => {
     await user.type(priceInput(), '0')
     await user.click(screen.getByRole('button', { name: 'Review entry' }))
     updatePersonal(second)
+    await openNutritionDetails(user)
     expect(screen.getByRole('link', { name: 'Illustrative personal label' })).toBeDefined()
     expect(screen.queryByRole('link', { name: 'Corrected illustrative personal source' })).toBeNull()
     expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
     await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    await openNutritionDetails(user)
     expect(screen.getByRole('link', { name: 'Corrected illustrative personal source' }).getAttribute('href'))
       .toBe('https://example.invalid/corrected')
     expect(nutritionInput().value).toBe(nutritionKey(second))
@@ -745,6 +770,7 @@ describe('pinned personal nutrition versions and explicit adoption', () => {
     updatePersonal(makePersonalSetup(2, { source: { label: 'Unsafe new source', url: 'javascript:example' } }))
     expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Unsafe new source' })).toBeNull()
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
     expect(nutritionInput().value).toBe(nutritionKey(first))
     expect(metricText('Estimated sugar')).toContain('34.65 g')
     expect(metricText('Coke-only calories')).toContain('138.6 kcal')
@@ -764,5 +790,216 @@ describe('pinned personal nutrition versions and explicit adoption', () => {
     await user.selectOptions(nutritionInput(), nutritionKey(latest))
     expect(metricText('Estimated sugar')).toContain('36.3 g')
     expect(nutritionInput().value).toBe(nutritionKey(latest))
+  })
+})
+
+// These injected reviewed references exercise UI behavior only. Their names,
+// markets, and rates are illustrative fixtures, not production review evidence.
+function makeReviewedReference(version = 1, overrides: Partial<NutritionCatalogReference> = {}): NutritionCatalogReference {
+  return {
+    ...makeReference(),
+    id: 'illustrative-cola-gb',
+    version,
+    productDescription: 'Illustrative cola — Great Britain',
+    source: { label: 'Illustrative reviewed source', url: 'https://example.invalid/reviewed-label' },
+    ...overrides,
+  }
+}
+
+function reviewedKey(reference: NutritionCatalogReference) {
+  return JSON.stringify(['reviewed', reference.id, reference.version])
+}
+
+function renderReviewedForm(
+  references: readonly NutritionCatalogReference[] = [makeReviewedReference()],
+  options: { personalNutrition?: PersonalNutritionSetup; timeZone?: string; currency?: CurrencyCode; initialLocalDateTime?: string } = {},
+) {
+  const user = userEvent.setup()
+  const props = {
+    currency: options.currency ?? 'BDT',
+    timeZone: options.timeZone ?? 'Asia/Dhaka',
+    initialLocalDateTime: options.initialLocalDateTime ?? '2026-11-08T00:05',
+    personalNutrition: options.personalNutrition,
+    draftId: 'illustrative-reviewed-draft',
+  }
+  const view = render(<DrinkEntryForm {...props} references={references} />)
+  return {
+    user,
+    updateReferences: (latest: readonly NutritionCatalogReference[]) => {
+      view.rerender(<DrinkEntryForm {...props} references={latest} />)
+    },
+  }
+}
+
+describe('simple reviewed Coke product selection', () => {
+  it('groups reviewed products and personal values without choosing either automatically', async () => {
+    const first = makeReviewedReference()
+    const personal = makePersonalSetup()
+    const { user } = renderReviewedForm([first], { personalNutrition: personal })
+    expect(nutritionInput().value).toBe('')
+    const reviewed = within(nutritionInput()).getByRole('group', { name: 'Reviewed products' })
+    const ownValues = within(nutritionInput()).getByRole('group', { name: 'My label values' })
+    expect(within(reviewed).getByRole('option', { name: first.productDescription })).toBeDefined()
+    expect(within(ownValues).getByRole('option', { name: personal.reference.productDescription })).toBeDefined()
+    expect(screen.getByText('Product not listed? Add your label values in Settings.')).toBeDefined()
+    expect(metricText('Estimated sugar')).toContain('Choose a nutrition reference')
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(metricText('Coke-only calories')).toContain('138.6 kcal')
+    await user.selectOptions(nutritionInput(), nutritionKey(personal))
+    expect(within(screen.getByRole('region', { name: 'Draft preview' }))
+      .getByText('User-provided — not independently verified.')).toBeDefined()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('keeps nutrition details collapsed and preserves keyboard order through the disclosed safe source', async () => {
+    const first = makeReviewedReference()
+    const { user } = renderReviewedForm([first])
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    expect(nutritionDetails().details.open).toBe(false)
+    await user.click(nutritionInput())
+    await user.tab()
+    expect(document.activeElement).toBe(nutritionDetails().summary)
+    await user.click(nutritionDetails().summary)
+    expect(nutritionDetails().details.open).toBe(true)
+    await user.tab()
+    const source = screen.getByRole('link', { name: first.source.label })
+    expect(document.activeElement).toBe(source)
+    expect(source.getAttribute('href')).toBe(first.source.url)
+    expect(source.getAttribute('rel')).toContain('noopener')
+    expect(source.getAttribute('rel')).toContain('noreferrer')
+    expect(screen.getByText(/Reference illustrative-cola-gb · Version 1/)).toBeDefined()
+    await user.tab({ shift: true })
+    expect(document.activeElement).toBe(nutritionDetails().summary)
+    await user.click(nutritionDetails().summary)
+    expect(nutritionDetails().details.open).toBe(false)
+  })
+
+  it('requires explicit choice between the same product from different markets regardless of currency', async () => {
+    const british = makeReviewedReference()
+    const japanese = makeReviewedReference(1, {
+      id: 'illustrative-cola-jp', productDescription: 'Illustrative cola — Japan', sugarGramsPer100Ml: 12,
+    })
+    const { user, updateReferences } = renderReviewedForm([british, japanese], { currency: 'JPY', timeZone: 'Asia/Tokyo' })
+    expect(nutritionInput().value).toBe('')
+    await user.selectOptions(nutritionInput(), reviewedKey(british))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    updateReferences([{ ...japanese, version: 2, sugarGramsPer100Ml: 13 }])
+    expect(nutritionInput().value).toBe(reviewedKey(british))
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    await user.selectOptions(nutritionInput(), reviewedKey({ ...japanese, version: 2 }))
+    expect(metricText('Estimated sugar')).toContain('42.9 g')
+  })
+})
+
+describe('pinned reviewed product versions', () => {
+  it('preserves the selected reviewed version until adoption and retains every other draft field', async () => {
+    const first = makeReviewedReference()
+    const second = makeReviewedReference(2, { sugarGramsPer100Ml: 11, kcalPer100Ml: 43 })
+    const { user, updateReferences } = renderReviewedForm([first], {
+      timeZone: 'America/New_York', initialLocalDateTime: '2026-11-01T01:30',
+    })
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customSizeInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '123.45')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    const focusBefore = document.activeElement
+    updateReferences([second])
+    expect(document.activeElement).toBe(focusBefore)
+    expect(nutritionInput().value).toBe(reviewedKey(first))
+    expect(metricText('Estimated sugar')).toContain('78.75 g')
+    expect(metricText('Coke-only calories')).toContain('315 kcal')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(document.activeElement).toBe(nutritionInput())
+    expect(nutritionInput().value).toBe(reviewedKey(second))
+    expect(metricText('Estimated sugar')).toContain('82.5 g')
+    expect(metricText('Coke-only calories')).toContain('322.5 kcal')
+    expect(reviewStatus().textContent).toBe('')
+    expect(customSizeInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Price unknown' }).checked).toBe(true)
+    expect(screen.getByLabelText<HTMLInputElement>('Consumption date and time').value).toBe('2026-11-01T01:30')
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('123.45')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('pins source-only changes until explicit adoption and clears the old Review afterward', async () => {
+    const first = makeReviewedReference()
+    const second = makeReviewedReference(2, {
+      source: { label: 'Corrected illustrative reviewed source', url: 'https://example.invalid/reviewed-correction' },
+    })
+    const { user, updateReferences } = renderReviewedForm([first])
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updateReferences([second])
+    await openNutritionDetails(user)
+    expect(screen.getByRole('link', { name: first.source.label })).toBeDefined()
+    expect(screen.queryByRole('link', { name: second.source.label })).toBeNull()
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    await openNutritionDetails(user)
+    expect(screen.getByRole('link', { name: second.source.label }).getAttribute('href')).toBe(second.source.url)
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(reviewStatus().textContent).toBe('')
+    expect(priceInput().value).toBe('0')
+  })
+
+  it('adopts the highest valid matching revision even when references are not version-sorted', async () => {
+    const first = makeReviewedReference()
+    const second = makeReviewedReference(2, { sugarGramsPer100Ml: 11 })
+    const newest = makeReviewedReference(4, { sugarGramsPer100Ml: 13 })
+    const invalidNewer = makeReviewedReference(9, { kcalPer100Ml: Infinity })
+    const { user, updateReferences } = renderReviewedForm([first])
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    updateReferences([newest, first, invalidNewer, second])
+    expect(nutritionInput().value).toBe(reviewedKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(nutritionInput().value).toBe(reviewedKey(newest))
+    expect(metricText('Estimated sugar')).toContain('42.9 g')
+    expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
+  })
+
+  it('preserves a valid pinned review when the only newer reviewed candidate is invalid', async () => {
+    const first = makeReviewedReference()
+    const { user, updateReferences } = renderReviewedForm([first])
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    updateReferences([makeReviewedReference(2, {
+      source: { label: 'Unsafe reviewed source', url: 'javascript:example' },
+    })])
+    expect(nutritionInput().value).toBe(reviewedKey(first))
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Unsafe reviewed source' })).toBeNull()
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('keeps a copied reviewed version unchanged when callers mutate data without publishing a new version', async () => {
+    const first = makeReviewedReference()
+    const { user, updateReferences } = renderReviewedForm([first])
+    await user.selectOptions(nutritionInput(), reviewedKey(first))
+    expect(Reflect.set(first, 'sugarGramsPer100Ml', 0)).toBe(true)
+    expect(Reflect.set(first.source, 'label', 'Changed after selection')).toBe(true)
+    updateReferences([first])
+    expect(metricText('Estimated sugar')).toContain('34.65 g')
+    expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+    await openNutritionDetails(user)
+    expect(screen.getByRole('link', { name: 'Illustrative reviewed source' })).toBeDefined()
+    expect(screen.queryByRole('link', { name: 'Changed after selection' })).toBeNull()
   })
 })
