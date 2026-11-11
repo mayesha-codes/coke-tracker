@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FocusEvent, FormEvent } from 'react'
-import type { NutritionProvenance, PersonalNutritionSetup } from '../../app/session/sessionState'
+import type { NutritionProvenance, PersonalNutritionSetup, SessionEntryRecord } from '../../app/session/sessionState'
 import { createNutritionReference } from '../../domain/nutrition'
 import { SERVING_PRESETS } from '../../domain/servings'
 import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
@@ -26,6 +26,11 @@ type DrinkEntryFormProps = {
   timeZone: string
   initialLocalDateTime: string
   draftId: string
+  /** Saving is connected by LogPage; a standalone form can remain preview-only. */
+  onSave?: (record: SessionEntryRecord) => void
+  submitting?: boolean
+  isActive?: boolean
+  onDraftChange?: () => void
 }
 
 type ControlField = 'serving' | 'quantity' | 'price' | 'time' | 'reference'
@@ -70,6 +75,10 @@ function DrinkEntryForm({
   timeZone,
   initialLocalDateTime,
   draftId,
+  onSave,
+  submitting = false,
+  isActive = true,
+  onDraftChange,
 }: DrinkEntryFormProps) {
   const [servingSelection, setServingSelection] = useState<ServingSizeSelection>('330ml')
   const [customMlText, setCustomMlText] = useState('')
@@ -176,6 +185,7 @@ function DrinkEntryForm({
     const selector = pendingFocus.current
     if (selector === null) return
     pendingFocus.current = null
+    if (!isActive || formRef.current?.closest('[hidden], [inert]')) return
     const candidate = formRef.current?.querySelector<HTMLElement>(selector)
     const disabled = candidate instanceof HTMLInputElement || candidate instanceof HTMLSelectElement
       ? candidate.disabled : false
@@ -186,6 +196,7 @@ function DrinkEntryForm({
 
   function changed() {
     setReviewStatus('')
+    onDraftChange?.()
   }
 
   function selectNutrition(value: string) {
@@ -238,6 +249,7 @@ function DrinkEntryForm({
 
   function handleReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (submitting) return
     setReviewCount(count => count + 1)
     if (issues.length > 0) {
       setReviewStatus('')
@@ -250,13 +262,30 @@ function DrinkEntryForm({
     setReviewStatus('Ready to save — not saved yet.')
   }
 
+  function handleSave() {
+    if (submitting || onSave === undefined || selectedNutrition === null) return
+    // A previous render or Review is never the authority for a real submission.
+    const checked = prepareDrinkEntry(draft, selectedNutrition.reference, { id: draftId, currency })
+    setReviewStatus('')
+    if (checked.valid === false) {
+      setReviewCount(count => count + 1)
+      const firstIssue = servingSelection === 'custom'
+        ? checked.issues.find(issue => controlField(issue.field) === 'serving') ?? checked.issues[0]
+        : checked.issues[0]
+      if (firstIssue !== undefined) pendingFocus.current = selectorForIssue(firstIssue.field, servingSelection)
+      return
+    }
+    onSave(Object.freeze({ entry: checked.entry, nutritionProvenance: selectedNutrition }))
+  }
+
   return (
-    <form className="logging-form" ref={formRef} noValidate onSubmit={handleReview} onBlurCapture={handleBlur}>
+    <form className="logging-form" ref={formRef} noValidate onSubmit={handleReview} onBlurCapture={handleBlur}
+      aria-busy={submitting}>
       <div className="logging-form__layout">
-        <div className="logging-form__fields">
+        <fieldset className="logging-form__fields logging-form__controls" disabled={submitting} aria-labelledby="logging-form-title">
           <div className="logging-form__intro">
             <p className="logging-eyebrow">One entry. A little more awareness.</p>
-            <h2>Your drink details</h2>
+            <h2 id="logging-form-title">Your drink details</h2>
             <p className="logging-help">Build a draft and review its estimates. Your total price covers every drink in this entry.</p>
           </div>
 
@@ -293,15 +322,17 @@ function DrinkEntryForm({
             updateAvailable={updateAvailable} onUseLatest={useLatestNutrition} />
 
           <div className="logging-form__actions">
-            <button className="logging-button logging-button--primary" type="submit">Review entry</button>
-            <button className="logging-button logging-button--disabled" type="button" disabled
+            <button className="logging-button" type="submit">Review entry</button>
+            <button className="logging-button logging-button--primary" type="button"
+              disabled={submitting || onSave === undefined || prepared?.valid !== true} onClick={handleSave}
               aria-describedby="logging-save-explanation">Save entry</button>
           </div>
           <p className="logging-help" id="logging-save-explanation">
-            Saving is not available yet. Persistence will be added later; reviewing this draft does not save an entry.
+            {onSave === undefined ? 'Saving is not connected in this preview.'
+              : 'Complete every required field to save. Review is optional; entries are kept for this session only.'}
           </p>
           <p className="logging-review-status" role="status" aria-label="Review status">{reviewStatus}</p>
-        </div>
+        </fieldset>
 
         <DrinkPreview preview={preview} currency={currency} nutritionSelection={selectedNutrition} />
       </div>

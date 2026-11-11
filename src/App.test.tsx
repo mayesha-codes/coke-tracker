@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import SessionProvider from './app/session/SessionProvider'
 import { useSession } from './app/session/sessionContext'
 import { createSessionState, transitionSession } from './app/session/sessionState'
-import type { SessionState } from './app/session/sessionState'
+import type { SessionEntryRecord, SessionState } from './app/session/sessionState'
 import { createDrinkEntry } from './domain/entries'
 import type { TrackingSettings } from './domain/types'
 import type { PersonalNutritionDraft } from './features/nutrition/nutritionInput'
@@ -47,14 +48,15 @@ function SessionTestControls() {
   )
 }
 
-function renderApp(options: { initialState?: SessionState; controls?: boolean } = {}) {
+function renderApp(options: { initialState?: SessionState; controls?: boolean; strict?: boolean } = {}) {
   const user = userEvent.setup()
-  const view = render(
+  const content = (
     <SessionProvider initialState={options.initialState}>
       {options.controls && <SessionTestControls />}
       <App />
-    </SessionProvider>,
+    </SessionProvider>
   )
+  const view = render(options.strict ? <StrictMode>{content}</StrictMode> : content)
   return { user, ...view }
 }
 
@@ -476,7 +478,7 @@ describe('personal nutrition selection in retained Log drafts', () => {
     expect(quantityInput().value).toBe('02')
     expect(priceInput().value).toBe('300')
     expect(dateTimeInput().value).toBe('2026-11-07T20:15')
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(false)
   })
 
   it('keeps an existing custom draft and repeated-time choice when personal nutrition is first configured', async () => {
@@ -558,7 +560,7 @@ describe('personal nutrition selection in retained Log drafts', () => {
     expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Price unknown' }).checked).toBe(true)
     expect(dateTimeInput().value).toBe('2026-11-01T01:30')
     expect(screen.getByRole<HTMLInputElement>('radio', { name: /Later occurrence/ }).checked).toBe(true)
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(false)
     await user.click(screen.getByRole('radio', { name: 'Price known' }))
     expect(priceInput().value).toBe('300')
   })
@@ -688,5 +690,189 @@ describe('personal nutrition selection in retained Log drafts', () => {
     expect(added.state.entries[0].entry.nutrition.referenceVersion).toBe(1)
     expect(added.state.entries[0].nutritionProvenance.reference.source.label).toBe('Illustrative package label')
     expect(added.state.entries[0].nutritionProvenance.kind).toBe('user-provided')
+  })
+})
+
+function savedSessionEntries(): readonly SessionEntryRecord[] {
+  return JSON.parse(screen.getByTestId('test-session-history').textContent ?? '[]')
+}
+
+async function readyPersonalEntry(user: ReturnType<typeof userEvent.setup>) {
+  await navigate(user, 'Log')
+  await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+  await selectPersonalNutrition(user)
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(false)
+}
+
+describe('temporary saving through the application and shared session', () => {
+  it.each(['known zero', 'unknown'] as const)('saves a reviewed product with a %s total price', async mode => {
+    const { user } = renderApp({ controls: true })
+    await navigate(user, 'Log')
+    if (mode === 'known zero') await user.type(priceInput(), '0')
+    else await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    await user.selectOptions(nutritionSelect(), JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(screen.queryByRole('region', { name: 'Draft preview' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Quantity' })).toBeNull()
+    const records = savedSessionEntries()
+    expect(records).toHaveLength(1)
+    expect(records[0].entry).toMatchObject({
+      quantity: 2, servingMl: 330, consumedAt: referenceTime,
+      currency: 'JPY', totalPriceMinor: mode === 'known zero' ? 0 : null,
+      nutrition: { referenceId: 'coca-cola-original-taste-gb', referenceVersion: 1 },
+    })
+    expect(records[0].nutritionProvenance.kind).toBe('reviewed')
+    expect(records[0].nutritionProvenance.reference.productDescription).toBe('Coca-Cola Original Taste — Great Britain')
+  })
+
+  it('saves the pinned personal version, custom volume, and later time occurrence after Settings publishes newer values', async () => {
+    const initialState = personalState({ currency: 'JPY', reportingTimeZone: 'America/New_York', dailyLimitMl: null })
+    const { user } = renderApp({ initialState, controls: true })
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '300')
+    fireEvent.change(dateTimeInput(), { target: { value: '2026-11-01T01:30' } })
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+    await selectPersonalNutrition(user)
+    await navigate(user, 'Settings')
+    fillNutritionSettings({ sugarGramsPer100MlText: '11', kcalPer100MlText: '43', sourceDescription: 'New illustrative label' })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+
+    const first = savedSessionEntries()[0]
+    expect(first.entry).toMatchObject({
+      quantity: 2, servingMl: 375, totalPriceMinor: 300, currency: 'JPY',
+      consumedAt: '2026-11-01T06:30:00.000Z',
+      nutrition: { referenceVersion: 1, sugarGramsPer100Ml: 10.5, kcalPer100Ml: 42 },
+    })
+    expect(first.nutritionProvenance).toMatchObject({
+      kind: 'user-provided', reference: { version: 1, source: { label: 'Illustrative package label' } },
+    })
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Use latest values' })).toBeNull()
+    const before = JSON.stringify(savedSessionEntries())
+
+    await navigate(user, 'Settings')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Currency' }), 'USD')
+    fireEvent.change(screen.getByLabelText('Reporting timezone', { exact: true }), { target: { value: 'UTC' } })
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    await navigate(user, 'Log')
+    expect(JSON.stringify(savedSessionEntries())).toBe(before)
+    expect(nutritionSelect().value).toBe('')
+    expect(priceInput().value).toBe('')
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+  })
+
+  it('retains a saved confirmation through navigation and accepts intentionally identical drinks after Log another drink', async () => {
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await readyPersonalEntry(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const first = savedSessionEntries()[0]
+    for (const view of ['Home', 'History', 'Settings', 'Log'] as const) await navigate(user, view)
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(savedSessionEntries()).toEqual([first])
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: '330 ml' }).checked).toBe(true)
+    expect(quantityInput().value).toBe('1')
+    expect(priceInput().value).toBe('')
+    expect(nutritionSelect().value).toBe('')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const records = savedSessionEntries()
+    expect(records).toHaveLength(2)
+    expect(records[1].entry.id).not.toBe(first.entry.id)
+    const { id: firstId, ...firstValues } = first.entry
+    const { id: secondId, ...secondValues } = records[1].entry
+    expect(firstId).toBeTruthy()
+    expect(secondId).toBeTruthy()
+    expect(secondValues).toEqual(firstValues)
+    expect(records[1].nutritionProvenance).toEqual(first.nutritionProvenance)
+  })
+
+  it('keeps Enter in a text field as Review and saves only after activating the focused Save button', async () => {
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await navigate(user, 'Log')
+    await user.type(priceInput(), '0')
+    await selectPersonalNutrition(user)
+    priceInput().focus()
+    await user.keyboard('{Enter}')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(savedSessionEntries()).toHaveLength(0)
+    screen.getByRole('button', { name: 'Save entry' }).focus()
+    await user.keyboard('{Enter}{Enter}')
+    expect(savedSessionEntries()).toHaveLength(1)
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Save entry' })).toBeNull()
+  })
+
+  it('adds one record for a rapid double click under StrictMode and never resubmits on navigation', async () => {
+    const { user } = renderApp({ initialState: personalState(), controls: true, strict: true })
+    await readyPersonalEntry(user)
+    await user.dblClick(screen.getByRole('button', { name: 'Save entry' }))
+    expect(savedSessionEntries()).toHaveLength(1)
+    await navigate(user, 'Home')
+    await navigate(user, 'Log')
+    expect(savedSessionEntries()).toHaveLength(1)
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+  })
+
+  it('retains an editable draft when request UUID generation fails and saves it with the original entry ID after retry', async () => {
+    const entryId = '303e7a77-e6b6-4fea-8af7-d132570497be'
+    const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValueOnce(entryId)
+      .mockImplementationOnce(() => { throw new Error('Illustrative UUID failure') })
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await readyPersonalEntry(user)
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    expect(savedSessionEntries()).toHaveLength(0)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(customServingInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(nutritionSelect().value).toBe(JSON.stringify(['user-provided', 'illustrative-personal-label', 1]))
+    uuid.mockRestore()
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    expect(savedSessionEntries()).toHaveLength(1)
+    expect(savedSessionEntries()[0].entry.id).toBe(entryId)
+    expect(savedSessionEntries()[0].entry.servingMl).toBe(375)
+  })
+
+  it.each(['Use USD in test', 'Use UTC in test'])('preserves an accepted record but does not confirm the new draft after %s is queued during saving', async change => {
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await readyPersonalEntry(user)
+    const save = screen.getByRole('button', { name: 'Save entry' })
+    const update = screen.getByRole('button', { name: change })
+    act(() => { save.click(); update.click() })
+    expect(savedSessionEntries()).toHaveLength(1)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(nutritionSelect().value).toBe('')
+    expect(quantityInput().value).toBe('1')
+    expect(priceInput().value).toBe('')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
+  })
+
+  it('does not focus hidden Log content when saving and navigation are queued together', async () => {
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await readyPersonalEntry(user)
+    const save = screen.getByRole('button', { name: 'Save entry' })
+    const settings = screen.getByRole('button', { name: 'Settings' })
+    act(() => { save.click(); settings.click() })
+    expect(savedSessionEntries()).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('Settings')
+    expect(document.activeElement?.closest('[hidden], [inert]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Log another drink' })).toBeNull()
+    await navigate(user, 'Log')
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(savedSessionEntries()).toHaveLength(1)
   })
 })

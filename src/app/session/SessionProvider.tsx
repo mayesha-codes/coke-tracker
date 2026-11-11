@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import type { TrackingSettings } from '../../domain/types'
 import type { PersonalNutritionDraft } from '../../features/nutrition/nutritionInput'
 import { SessionContext } from './sessionContext'
+import type { EntrySaveReceipt, EntrySaveRequest } from './sessionContext'
 import { createSessionState, transitionSession } from './sessionState'
 import type { SessionState, SessionTransitionResult } from './sessionState'
 
@@ -16,10 +17,12 @@ type ProviderState = {
   session: SessionState
   lastPreferenceResult: SessionTransitionResult | null
   lastNutritionResult: SessionTransitionResult | null
+  lastEntryResult: EntrySaveReceipt | null
 }
 
 type ProviderAction =
   | { readonly type: 'update-preferences'; readonly preferences: TrackingSettings }
+  | ({ readonly type: 'add-entry' } & EntrySaveRequest)
   | {
     readonly type: 'apply-personal-nutrition'
     readonly draft: PersonalNutritionDraft
@@ -28,11 +31,11 @@ type ProviderAction =
 
 function initializeSession(initialState: SessionState | undefined): ProviderState {
   if (initialState !== undefined) {
-    return { session: initialState, lastPreferenceResult: null, lastNutritionResult: null }
+    return { session: initialState, lastPreferenceResult: null, lastNutritionResult: null, lastEntryResult: null }
   }
   const initial = createSessionState()
   if (initial.valid === false) throw new Error('The initial session preferences are invalid.')
-  return { session: initial.state, lastPreferenceResult: null, lastNutritionResult: null }
+  return { session: initial.state, lastPreferenceResult: null, lastNutritionResult: null, lastEntryResult: null }
 }
 
 function applySessionAction(current: ProviderState, action: ProviderAction): ProviderState {
@@ -40,6 +43,15 @@ function applySessionAction(current: ProviderState, action: ProviderAction): Pro
   if (action.type === 'update-preferences') {
     const result = transitionSession(current.session, action)
     return { ...current, session: result.state, lastPreferenceResult: result }
+  }
+
+  if (action.type === 'add-entry') {
+    const result = transitionSession(current.session, { type: 'add-entry', record: action.record })
+    return {
+      ...current,
+      session: result.state,
+      lastEntryResult: Object.freeze({ requestId: action.requestId, result }),
+    }
   }
 
   // Two commands can be queued before React renders the first setup. Resolve its
@@ -67,6 +79,9 @@ function SessionProvider({ children, initialState }: SessionProviderProps) {
   const updatePreferences = useCallback((preferences: TrackingSettings) => {
     dispatch({ type: 'update-preferences', preferences })
   }, [])
+  const addEntry = useCallback((request: EntrySaveRequest) => {
+    dispatch({ type: 'add-entry', requestId: request.requestId, record: request.record })
+  }, [])
   const applyPersonalNutrition = useCallback((draft: PersonalNutritionDraft) => {
     // This event-command boundary owns UUID generation; the reducer stays pure.
     let newSetupId: string | null
@@ -83,7 +98,9 @@ function SessionProvider({ children, initialState }: SessionProviderProps) {
     lastPreferenceResult: current.lastPreferenceResult,
     applyPersonalNutrition,
     lastNutritionResult: current.lastNutritionResult,
-  }), [current, updatePreferences, applyPersonalNutrition])
+    addEntry,
+    lastEntryResult: current.lastEntryResult,
+  }), [current, updatePreferences, applyPersonalNutrition, addEntry])
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
 }

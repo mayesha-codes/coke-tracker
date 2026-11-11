@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 import { StrictMode, useEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { TrackingSettings } from '../../domain/types'
 import type { PersonalNutritionDraft } from '../../features/nutrition/nutritionInput'
 import SessionProvider from './SessionProvider'
 import { useSession } from './sessionContext'
-import type { SessionContextValue } from './sessionContext'
+import type { EntrySaveRequest, SessionContextValue } from './sessionContext'
 import { createSessionState, transitionSession } from './sessionState'
-import type { SessionState } from './sessionState'
+import type { NutritionProvenance, SessionEntryRecord, SessionState } from './sessionState'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -427,5 +427,368 @@ describe('separate personal nutrition commands in the session provider', () => {
     expect(snapshot?.lastNutritionResult?.outcome).toBe('accepted')
     expect(snapshot?.state.personalNutrition?.reference.id).toBe(id)
     expect(snapshot?.state.personalNutrition?.reference.version).toBe(2)
+  })
+})
+
+// These records reuse illustrative fixtures; "reviewed" tests provenance handling,
+// not independent verification or inclusion in the production product registry.
+function entryToSave(id = 'illustrative-new-entry', kind: NutritionProvenance['kind'] = 'user-provided'): SessionEntryRecord {
+  const record = structuredClone(stateWithHistory().entries[0])
+  return {
+    entry: { ...record.entry, id },
+    nutritionProvenance: { ...record.nutritionProvenance, kind },
+  }
+}
+
+function EntryProbe({ onSnapshot }: { onSnapshot: (value: SessionContextValue) => void }) {
+  const session = useSession()
+  useEffect(() => { onSnapshot(session) }, [onSnapshot, session])
+  return (
+    <div>
+      <p data-testid="saved-entry-count">{session.state.entries.length}</p>
+      <p data-testid="entry-request">{session.lastEntryResult?.requestId ?? 'not requested'}</p>
+      <p data-testid="entry-outcome">{session.lastEntryResult?.result.outcome ?? 'not requested'}</p>
+    </div>
+  )
+}
+
+function renderEntryProvider(initialState?: SessionState, strict = false) {
+  let snapshot: SessionContextValue | undefined
+  const onSnapshot = (value: SessionContextValue) => { snapshot = value }
+  const contents = <SessionProvider initialState={initialState}><EntryProbe onSnapshot={onSnapshot} /></SessionProvider>
+  const view = render(strict ? <StrictMode>{contents}</StrictMode> : contents)
+  return {
+    view,
+    onSnapshot,
+    session() {
+      if (snapshot === undefined) throw new Error('Expected the mounted provider to expose its session.')
+      return snapshot
+    },
+  }
+}
+
+describe('temporary entry-saving commands in the session provider', () => {
+  it('starts without an entry result and exposes no acceptance merely from calling addEntry', () => {
+    const { session } = renderEntryProvider()
+    expect(session().lastEntryResult).toBeNull()
+    act(() => {
+      const returned = session().addEntry({ requestId: 'save-attempt-one', record: entryToSave() })
+      expect(returned).toBeUndefined()
+      // The current render is unchanged until React commits the queued transition.
+      expect(session().lastEntryResult).toBeNull()
+      expect(session().state.entries).toHaveLength(0)
+    })
+    expect(session().lastEntryResult?.requestId).toBe('save-attempt-one')
+    expect(session().lastEntryResult?.result.outcome).toBe('accepted')
+    expect(session().state.entries).toHaveLength(1)
+  })
+
+  it.each(['reviewed', 'user-provided'] as const)('accepts a %s record with its original values and matching request ID', kind => {
+    const original = makeState()
+    const { session } = renderEntryProvider(original)
+    const record = entryToSave('illustrative-entry', kind)
+    const before = structuredClone(record)
+    act(() => { session().addEntry({ requestId: `save-${kind}`, record }) })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe(`save-${kind}`)
+    expect(receipt?.result.outcome).toBe('accepted')
+    expect(receipt?.result.state).toBe(session().state)
+    expect(session().state.entries).toEqual([before])
+    expect(session().state.entries[0].nutritionProvenance.kind).toBe(kind)
+    expect(session().state.preferences).toBe(original.preferences)
+    expect(session().state.personalNutrition).toBeNull()
+    expect(session().lastPreferenceResult).toBeNull()
+    expect(session().lastNutritionResult).toBeNull()
+    expect(record).toEqual(before)
+    expect(Object.isFrozen(receipt)).toBe(true)
+  })
+
+  it('reports a duplicate as a rejection for the new request without reusing the previous acceptance', () => {
+    const { session } = renderEntryProvider()
+    act(() => { session().addEntry({ requestId: 'accepted-attempt', record: entryToSave() }) })
+    const acceptedReceipt = session().lastEntryResult
+    const acceptedState = session().state
+    const duplicate = entryToSave()
+    act(() => { session().addEntry({ requestId: 'duplicate-attempt', record: duplicate }) })
+    const receipt = session().lastEntryResult
+    expect(receipt).not.toBe(acceptedReceipt)
+    expect(receipt?.requestId).toBe('duplicate-attempt')
+    expect(receipt?.result.outcome).toBe('duplicate')
+    if (receipt?.result.outcome !== 'duplicate') throw new Error('Expected a duplicate outcome, never acceptance.')
+    expect(receipt.result.entryId).toBe(duplicate.entry.id)
+    expect(receipt.result.issues.map(issue => issue.field)).toContain('entry.id')
+    expect(session().state).toBe(acceptedState)
+    expect(session().state.entries).toHaveLength(1)
+  })
+
+  it('checks a rapid duplicate against the first queued addition instead of the old empty state', () => {
+    const { session } = renderEntryProvider()
+    act(() => {
+      session().addEntry({ requestId: 'first-click', record: entryToSave() })
+      session().addEntry({ requestId: 'second-click', record: entryToSave() })
+    })
+    expect(session().state.entries).toHaveLength(1)
+    expect(session().lastEntryResult?.requestId).toBe('second-click')
+    expect(session().lastEntryResult?.result.outcome).toBe('duplicate')
+  })
+
+  it('preserves intentionally identical drinks with different IDs when commands are queued rapidly', () => {
+    const { session } = renderEntryProvider()
+    const first = entryToSave('illustrative-first')
+    const second = entryToSave('illustrative-second')
+    act(() => {
+      session().addEntry({ requestId: 'first-attempt', record: first })
+      session().addEntry({ requestId: 'second-attempt', record: second })
+    })
+    expect(session().state.entries).toEqual([first, second])
+    expect(session().state.entries.map(saved => saved.entry.id)).toEqual(['illustrative-first', 'illustrative-second'])
+    expect(session().lastEntryResult?.requestId).toBe('second-attempt')
+    expect(session().lastEntryResult?.result.outcome).toBe('accepted')
+  })
+
+  it('keeps the first queued entry when the next command is invalid and tags the rejection correctly', () => {
+    const { session } = renderEntryProvider()
+    const first = entryToSave('illustrative-first')
+    const invalid = entryToSave('illustrative-invalid')
+    act(() => {
+      session().addEntry({ requestId: 'valid-attempt', record: first })
+      session().addEntry({
+        requestId: 'invalid-attempt',
+        record: { ...invalid, entry: { ...invalid.entry, consumedAt: '2026-02-30T09:30:00Z' } },
+      })
+    })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe('invalid-attempt')
+    expect(receipt?.result.outcome).toBe('invalid')
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected invalid timestamp feedback.')
+    expect(receipt.result.issues.map(issue => issue.field)).toContain('entry.consumedAt')
+    expect(receipt.result.state).toBe(session().state)
+    expect(session().state.entries).toEqual([first])
+  })
+
+  it('rejects a malformed runtime record atomically instead of trusting its TypeScript contract', () => {
+    const original = stateWithHistory()
+    const { session } = renderEntryProvider(original)
+    act(() => {
+      // An untyped JavaScript caller can still supply malformed data at runtime.
+      Reflect.apply(session().addEntry, undefined, [{ requestId: 'malformed-attempt', record: null }])
+    })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe('malformed-attempt')
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected invalid record feedback.')
+    expect(receipt.result.issues.map(issue => issue.field)).toContain('record')
+    expect(session().state).toBe(original)
+  })
+
+  it.each([
+    { field: 'quantity', value: 0, issue: 'entry.quantity' },
+    { field: 'servingMl', value: 0, issue: 'entry.servingMl' },
+    { field: 'totalPriceMinor', value: -1, issue: 'entry.totalPriceMinor' },
+    { field: 'currency', value: 'invalid', issue: 'entry.currency' },
+  ])('preserves session state when an invalid $field is submitted', ({ field, value, issue }) => {
+    const original = stateWithHistory()
+    const { session } = renderEntryProvider(original)
+    const record = entryToSave()
+    act(() => {
+      session().addEntry({ requestId: `invalid-${field}`, record: { ...record, entry: { ...record.entry, [field]: value } } })
+    })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe(`invalid-${field}`)
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected invalid entry feedback.')
+    expect(receipt.result.issues.map(found => found.field)).toContain(issue)
+    expect(session().state).toBe(original)
+  })
+
+  it.each([
+    { field: 'id', value: 'different-label' },
+    { field: 'version', value: 2 },
+    { field: 'sugarGramsPer100Ml', value: 11 },
+    { field: 'kcalPer100Ml', value: 43 },
+  ])('rejects a provenance $field that does not match the entry snapshot', ({ field, value }) => {
+    const original = stateWithHistory()
+    const { session } = renderEntryProvider(original)
+    const record = entryToSave()
+    act(() => {
+      session().addEntry({
+        requestId: `mismatch-${field}`,
+        record: {
+          ...record,
+          nutritionProvenance: {
+            ...record.nutritionProvenance,
+            reference: { ...record.nutritionProvenance.reference, [field]: value },
+          },
+        },
+      })
+    })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe(`mismatch-${field}`)
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected mismatched nutrition feedback.')
+    expect(receipt.result.issues.map(issue => issue.field)).toContain(`nutritionProvenance.reference.${field}`)
+    expect(session().state).toBe(original)
+  })
+
+  it('rejects aggregate spending overflow without adding any part of the second entry', () => {
+    const { session } = renderEntryProvider()
+    const first = entryToSave('illustrative-first')
+    const firstRequest: EntrySaveRequest = {
+      requestId: 'large-price-attempt',
+      record: { ...first, entry: { ...first.entry, totalPriceMinor: Number.MAX_SAFE_INTEGER } },
+    }
+    act(() => { session().addEntry(firstRequest) })
+    expect(session().lastEntryResult?.result.outcome).toBe('accepted')
+    const acceptedState = session().state
+    const second = entryToSave('illustrative-second')
+    act(() => {
+      session().addEntry({ requestId: 'overflow-attempt', record: { ...second, entry: { ...second.entry, totalPriceMinor: 1 } } })
+    })
+    const receipt = session().lastEntryResult
+    expect(receipt?.requestId).toBe('overflow-attempt')
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected aggregate overflow rejection.')
+    expect(receipt.result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'entries.knownAmountMinor', entryIndex: 1, currency: 'JPY' }),
+    ]))
+    expect(session().state).toBe(acceptedState)
+    expect(session().state.entries).toEqual([firstRequest.record])
+  })
+
+  it('rejects aggregate volume overflow after preserving the first safe entry', () => {
+    const { session } = renderEntryProvider()
+    const first = entryToSave('illustrative-first')
+    act(() => {
+      session().addEntry({
+        requestId: 'large-volume-attempt',
+        record: { ...first, entry: { ...first.entry, quantity: 1, servingMl: Number.MAX_SAFE_INTEGER } },
+      })
+    })
+    expect(session().lastEntryResult?.result.outcome).toBe('accepted')
+    const acceptedState = session().state
+    const second = entryToSave('illustrative-second')
+    act(() => {
+      session().addEntry({
+        requestId: 'volume-overflow-attempt',
+        record: { ...second, entry: { ...second.entry, quantity: 1, servingMl: 1 } },
+      })
+    })
+    const receipt = session().lastEntryResult
+    if (receipt?.result.outcome !== 'invalid') throw new Error('Expected aggregate volume rejection.')
+    expect(receipt.result.issues.map(issue => issue.field)).toContain('entries.volumeMl')
+    expect(session().state).toBe(acceptedState)
+    expect(session().state.entries).toHaveLength(1)
+  })
+
+  it('owns frozen snapshots and source copies without freezing or retaining caller-owned records', () => {
+    const { session } = renderEntryProvider()
+    const record = entryToSave()
+    const before = structuredClone(record)
+    act(() => { session().addEntry({ requestId: 'immutable-attempt', record }) })
+    const saved = session().state.entries[0]
+    for (const object of [session().state, session().state.entries, saved, saved.entry,
+      saved.entry.nutrition, saved.nutritionProvenance, saved.nutritionProvenance.reference,
+      saved.nutritionProvenance.reference.source]) {
+      expect(Object.isFrozen(object)).toBe(true)
+    }
+    expect(saved.entry).not.toBe(record.entry)
+    expect(saved.entry.nutrition).not.toBe(record.entry.nutrition)
+    expect(saved.nutritionProvenance.reference).not.toBe(record.nutritionProvenance.reference)
+    expect(saved.nutritionProvenance.reference.source).not.toBe(record.nutritionProvenance.reference.source)
+    expect(Reflect.set(record.entry, 'currency', 'BDT')).toBe(true)
+    expect(Reflect.set(record.entry.nutrition, 'sugarGramsPer100Ml', 0)).toBe(true)
+    expect(Reflect.set(record.nutritionProvenance.reference, 'kcalPer100Ml', 0)).toBe(true)
+    expect(Reflect.set(record.nutritionProvenance.reference.source, 'label', 'Changed test source')).toBe(true)
+    expect(saved).toEqual(before)
+    expect(Reflect.set(saved.entry, 'quantity', 99)).toBe(false)
+  })
+
+  it('keeps entry, preference, and nutrition results independent while commands are interleaved', () => {
+    const { session } = renderEntryProvider()
+    act(() => {
+      session().updatePreferences(usdPreferences)
+      session().applyPersonalNutrition(personalDraft())
+    })
+    const preferencesResult = session().lastPreferenceResult
+    const nutritionResult = session().lastNutritionResult
+    act(() => { session().addEntry({ requestId: 'independent-attempt', record: entryToSave() }) })
+    expect(session().lastPreferenceResult).toBe(preferencesResult)
+    expect(session().lastNutritionResult).toBe(nutritionResult)
+    const entryReceipt = session().lastEntryResult
+    act(() => {
+      session().updatePreferences({ ...usdPreferences, reportingTimeZone: 'Invalid/Zone' })
+      session().applyPersonalNutrition(personalDraft({ sugarGramsPer100MlText: '' }))
+    })
+    expect(session().lastPreferenceResult?.outcome).toBe('invalid')
+    expect(session().lastNutritionResult?.outcome).toBe('invalid')
+    expect(session().lastEntryResult).toBe(entryReceipt)
+    const rejectedPreferences = session().lastPreferenceResult
+    const rejectedNutrition = session().lastNutritionResult
+    act(() => { session().addEntry({ requestId: 'duplicate-independent-attempt', record: entryToSave() }) })
+    expect(session().lastEntryResult?.result.outcome).toBe('duplicate')
+    expect(session().lastPreferenceResult).toBe(rejectedPreferences)
+    expect(session().lastNutritionResult).toBe(rejectedNutrition)
+    expect(session().state.preferences).toEqual(usdPreferences)
+    expect(session().state.personalNutrition?.reference.version).toBe(1)
+    expect(session().state.entries).toHaveLength(1)
+  })
+
+  it('preserves saved currencies, timestamps, volumes, and nutrition after preferences and label values change', () => {
+    const { session } = renderEntryProvider()
+    const record = entryToSave()
+    act(() => { session().addEntry({ requestId: 'historical-attempt', record }) })
+    const entries = session().state.entries
+    const before = structuredClone(entries)
+    act(() => {
+      session().updatePreferences(usdPreferences)
+      session().applyPersonalNutrition(personalDraft({ sugarGramsPer100MlText: '0', kcalPer100MlText: '0' }))
+    })
+    expect(session().state.entries).toBe(entries)
+    expect(session().state.entries).toEqual(before)
+    expect(session().state.entries[0].entry.currency).toBe('JPY')
+    expect(session().state.entries[0].entry.consumedAt).toBe('2026-11-08T09:30:00.000Z')
+    expect(session().state.entries[0].entry.quantity).toBe(2)
+    expect(session().state.entries[0].entry.servingMl).toBe(330)
+    expect(session().state.entries[0].entry.totalPriceMinor).toBe(300)
+    expect(session().state.entries[0].entry.nutrition.sugarGramsPer100Ml).toBe(10.5)
+    expect(session().state.entries[0].nutritionProvenance.reference.version).toBe(1)
+  })
+
+  it('retains saved entries and their receipt when consumers navigate beneath the same provider', () => {
+    const { session, view, onSnapshot } = renderEntryProvider()
+    act(() => { session().addEntry({ requestId: 'navigation-attempt', record: entryToSave() }) })
+    const savedState = session().state
+    const receipt = session().lastEntryResult
+    view.rerender(<SessionProvider><p>Another application view</p></SessionProvider>)
+    view.rerender(<SessionProvider><EntryProbe onSnapshot={onSnapshot} /></SessionProvider>)
+    expect(session().state).toBe(savedState)
+    expect(session().lastEntryResult).toBe(receipt)
+    expect(screen.getByTestId('saved-entry-count').textContent).toBe('1')
+    expect(screen.getByTestId('entry-request').textContent).toBe('navigation-attempt')
+  })
+
+  it('clears saved entries and every result when a fresh provider is mounted', () => {
+    const { session, view } = renderEntryProvider()
+    act(() => {
+      session().addEntry({ requestId: 'previous-session-attempt', record: entryToSave() })
+      session().updatePreferences(usdPreferences)
+      session().applyPersonalNutrition(personalDraft())
+    })
+    expect(session().state.entries).toHaveLength(1)
+    view.unmount()
+    const fresh = renderEntryProvider()
+    expect(fresh.session().state.entries).toEqual([])
+    expect(fresh.session().state.preferences.currency).toBe('JPY')
+    expect(fresh.session().state.personalNutrition).toBeNull()
+    expect(fresh.session().lastEntryResult).toBeNull()
+    expect(fresh.session().lastPreferenceResult).toBeNull()
+    expect(fresh.session().lastNutritionResult).toBeNull()
+  })
+
+  it('saves once under StrictMode using supplied IDs without generating a UUID for entry saving', () => {
+    const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => { throw new Error('UUID must be supplied by the caller') })
+    const { session } = renderEntryProvider(undefined, true)
+    expect(session().state.entries).toEqual([])
+    act(() => { session().addEntry({ requestId: 'strict-mode-attempt', record: entryToSave() }) })
+    expect(session().lastEntryResult?.requestId).toBe('strict-mode-attempt')
+    expect(session().lastEntryResult?.result.outcome).toBe('accepted')
+    expect(session().state.entries).toHaveLength(1)
+    expect(uuid).not.toHaveBeenCalled()
   })
 })

@@ -268,7 +268,7 @@ describe('preference validation and accessible feedback', () => {
     const user = userEvent.setup()
     const state = initialState()
     const updatePreferences = vi.fn()
-    const view = render(<SessionContext.Provider value={{ state, updatePreferences, lastPreferenceResult: null, applyPersonalNutrition: vi.fn(), lastNutritionResult: null }}>
+    const view = render(<SessionContext.Provider value={{ state, updatePreferences, lastPreferenceResult: null, applyPersonalNutrition: vi.fn(), lastNutritionResult: null, addEntry: vi.fn(), lastEntryResult: null }}>
       <PreferencesPage />
     </SessionContext.Provider>)
     await user.selectOptions(currencyField(), 'USD')
@@ -278,7 +278,7 @@ describe('preference validation and accessible feedback', () => {
 
     const accepted = transitionSession(state, { type: 'update-preferences', preferences: updatePreferences.mock.calls[0][0] })
     expect(accepted.outcome).toBe('accepted')
-    view.rerender(<SessionContext.Provider value={{ state: accepted.state, updatePreferences, lastPreferenceResult: accepted, applyPersonalNutrition: vi.fn(), lastNutritionResult: null }}>
+    view.rerender(<SessionContext.Provider value={{ state: accepted.state, updatePreferences, lastPreferenceResult: accepted, applyPersonalNutrition: vi.fn(), lastNutritionResult: null, addEntry: vi.fn(), lastEntryResult: null }}>
       <PreferencesPage />
     </SessionContext.Provider>)
     expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('Preferences applied for this session.')

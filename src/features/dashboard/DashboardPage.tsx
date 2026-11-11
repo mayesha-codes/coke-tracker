@@ -69,8 +69,8 @@ function DashboardPage() {
           <p className="dashboard-eyebrow">Welcome to SipShift</p>
           <h2 id="setup-title">Your tracking journey starts here.</h2>
           <p className="dashboard-setup__description">
-            The app is taking shape. Drink logging and your personal dashboard
-            are coming next.
+            Drink logging is available for this session. Your personal dashboard
+            is coming next.
           </p>
         </div>
       </section>

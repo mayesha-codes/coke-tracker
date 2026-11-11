@@ -23,13 +23,13 @@ const placeholderDetails: Record<'history', PlaceholderDetails> = {
     icon: 'history',
     introduction: 'Your habits, with a little perspective.',
     description:
-      'Once logging is available, your entries will live here. You will be able to browse your days and make corrections.',
+      'Your drinks can now be saved for this session in Log. Browsing past days and making corrections will come later.',
     planned: ['Entries grouped by day', 'Edit or remove a drink', 'Clear, readable history'],
   },
 }
 
 function App() {
-  const { state } = useSession()
+  const { state, addEntry, lastEntryResult } = useSession()
   const [activeView, setActiveView] = useState<AppView>('home')
   const [hasVisitedLog, setHasVisitedLog] = useState(false)
   const { currency, reportingTimeZone } = state.preferences
@@ -63,6 +63,9 @@ function App() {
             personalNutrition={state.personalNutrition}
             headingId={activeView === 'log' ? 'view-heading' : 'log-view-heading'}
             draftWasReset={draftPreferences.wasReset}
+            addEntry={addEntry}
+            lastEntryResult={lastEntryResult}
+            isActive={activeView === 'log'}
           />
         )}
       </div>

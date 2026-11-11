@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import DrinkEntryForm from './DrinkEntryForm'
-import type { PersonalNutritionSetup } from '../../app/session/sessionState'
+import type { PersonalNutritionSetup, SessionEntryRecord } from '../../app/session/sessionState'
 import type { CurrencyCode, NutritionCatalogReference } from '../../domain/types'
+import * as drinkDraft from './drinkDraft'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 // These product descriptions and rates are illustrative test data only.
 function makeReference(): NutritionCatalogReference {
@@ -406,7 +408,7 @@ describe('DrinkEntryForm validation and review', () => {
     await user.keyboard('{Enter}')
     expect(screen.getByRole('status', { name: 'Review status' }).textContent).toBe('Ready to save — not saved yet.')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(true)
-    expect(screen.getByText(/Persistence will be added later/)).toBeDefined()
+    expect(screen.getByText('Saving is not connected in this preview.')).toBeDefined()
     expect(screen.queryByText(/^Saved successfully/i)).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
@@ -1001,5 +1003,252 @@ describe('pinned reviewed product versions', () => {
     await openNutritionDetails(user)
     expect(screen.getByRole('link', { name: 'Illustrative reviewed source' })).toBeDefined()
     expect(screen.queryByRole('link', { name: 'Changed after selection' })).toBeNull()
+  })
+})
+
+function renderSavingForm(overrides: Partial<ComponentProps<typeof DrinkEntryForm>> = {}) {
+  const user = userEvent.setup()
+  const onSave = vi.fn<(record: SessionEntryRecord) => void>()
+  let props: ComponentProps<typeof DrinkEntryForm> = {
+    references: [makeReference()],
+    currency: 'BDT',
+    timeZone: 'Asia/Dhaka',
+    initialLocalDateTime: '2026-11-08T00:05',
+    draftId: 'illustrative-save-draft',
+    onSave,
+    ...overrides,
+  }
+  const view = render(<DrinkEntryForm {...props} />)
+  return {
+    user,
+    onSave,
+    update(next: Partial<ComponentProps<typeof DrinkEntryForm>>) {
+      props = { ...props, ...next }
+      view.rerender(<DrinkEntryForm {...props} />)
+    },
+  }
+}
+
+function saveButton() {
+  return screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' })
+}
+
+describe('preparing a complete drink for temporary saving', () => {
+  it('enables Save only after complete valid input and submits frozen reviewed data without requiring Review', async () => {
+    const { user, onSave } = renderSavingForm()
+    expect(saveButton().disabled).toBe(true)
+    await selectReference(user)
+    expect(saveButton().disabled).toBe(true)
+    await user.type(priceInput(), '0')
+    expect(saveButton().disabled).toBe(false)
+    expect(reviewStatus().textContent).toBe('')
+    await user.click(saveButton())
+    expect(onSave).toHaveBeenCalledTimes(1)
+    const record = onSave.mock.calls[0][0]
+    expect(record.entry).toEqual({
+      id: 'illustrative-save-draft', consumedAt: '2026-11-07T18:05:00.000Z',
+      quantity: 1, servingMl: 330, totalPriceMinor: 0, currency: 'BDT',
+      nutrition: {
+        referenceId: 'illustrative-product', referenceVersion: 1,
+        sugarGramsPer100Ml: 10.5, kcalPer100Ml: 42,
+      },
+    })
+    expect(record.nutritionProvenance).toEqual({ kind: 'reviewed', reference: makeReference() })
+    for (const value of [record, record.entry, record.entry.nutrition,
+      record.nutritionProvenance, record.nutritionProvenance.reference,
+      record.nutritionProvenance.reference.source]) expect(Object.isFrozen(value)).toBe(true)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+  })
+
+  it('preserves a total price for multiple custom-sized servings instead of charging it per drink', async () => {
+    const { user, onSave } = renderSavingForm()
+    await selectReference(user)
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customSizeInput(), { target: { value: ' 00375 ' } })
+    fireEvent.change(quantityInput(), { target: { value: '02' } })
+    await user.type(priceInput(), '120.50')
+    await user.click(saveButton())
+    expect(onSave.mock.calls[0][0].entry).toEqual(expect.objectContaining({
+      servingMl: 375, quantity: 2, totalPriceMinor: 12050, currency: 'BDT',
+    }))
+    expect(customSizeInput().value).toBe(' 00375 ')
+    expect(quantityInput().value).toBe('02')
+    expect(priceInput().value).toBe('120.50')
+  })
+
+  it('saves unknown price as null while retaining cached known-price text in the draft', async () => {
+    const { user, onSave } = renderSavingForm()
+    await selectReference(user)
+    await user.type(priceInput(), '12.50')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    expect(saveButton().disabled).toBe(false)
+    await user.click(saveButton())
+    expect(onSave.mock.calls[0][0].entry.totalPriceMinor).toBeNull()
+    await user.click(screen.getByRole('radio', { name: 'Price known' }))
+    expect(priceInput().value).toBe('12.50')
+  })
+
+  it.each(['', '0', '-1', '1e3', '1.5', '9007199254740992'])(
+    'keeps Save disabled for invalid Custom volume %j', async text => {
+      const { user, onSave } = renderSavingForm()
+      await selectReference(user)
+      await user.type(priceInput(), '0')
+      await user.click(screen.getByRole('radio', { name: 'Custom' }))
+      fireEvent.change(customSizeInput(), { target: { value: text } })
+      expect(saveButton().disabled).toBe(true)
+      await user.click(saveButton())
+      expect(onSave).not.toHaveBeenCalled()
+    },
+  )
+
+  it('disables Save if previously reviewed input becomes invalid or safe volume arithmetic overflows', async () => {
+    const { user, onSave } = renderSavingForm()
+    await selectReference(user)
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(saveButton().disabled).toBe(false)
+    await user.clear(quantityInput())
+    expect(saveButton().disabled).toBe(true)
+    expect(reviewStatus().textContent).toBe('')
+    fireEvent.change(quantityInput(), { target: { value: String(Number.MAX_SAFE_INTEGER) } })
+    expect(saveButton().disabled).toBe(true)
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('rejects fractional JPY prices without silently rounding before saving', async () => {
+    const { user, onSave } = renderSavingForm({ currency: 'JPY' })
+    await selectReference(user)
+    await user.type(priceInput(), '100.5')
+    expect(saveButton().disabled).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    expect(document.getElementById('logging-price-error')?.textContent).toContain('0 decimal places')
+    expect(onSave).not.toHaveBeenCalled()
+    await user.clear(priceInput())
+    await user.type(priceInput(), '100')
+    await user.click(saveButton())
+    expect(onSave.mock.calls[0][0].entry.totalPriceMinor).toBe(100)
+  })
+
+  it('keeps Enter in an input as Review and reserves keyboard saving for the explicit Save button', async () => {
+    const { user, onSave } = renderSavingForm()
+    await selectReference(user)
+    await user.type(priceInput(), '0')
+    await user.click(quantityInput())
+    await user.keyboard('{Enter}')
+    expect(reviewStatus().textContent).toBe('Ready to save — not saved yet.')
+    expect(onSave).not.toHaveBeenCalled()
+    saveButton().focus()
+    await user.keyboard('{Enter}')
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(reviewStatus().textContent).toBe('')
+  })
+
+  it('re-runs prepareDrinkEntry in the Save handler before passing the record to its parent', async () => {
+    const prepare = vi.spyOn(drinkDraft, 'prepareDrinkEntry')
+    let callsAtSubmission = 0
+    const onSave = vi.fn(() => { callsAtSubmission = prepare.mock.calls.length })
+    const { user } = renderSavingForm({ onSave })
+    await selectReference(user)
+    await user.type(priceInput(), '0')
+    const beforeSave = prepare.mock.calls.length
+    // A direct click isolates submission from the separate blur-validation render.
+    fireEvent.click(saveButton())
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(callsAtSubmission).toBe(beforeSave + 1)
+  })
+
+  it('disables all native editing controls and Review while a request is pending, then keeps fields on release', async () => {
+    const { user, onSave, update } = renderSavingForm()
+    await selectReference(user)
+    await user.type(priceInput(), '8.50')
+    update({ submitting: true })
+    expect(document.querySelector('form')?.getAttribute('aria-busy')).toBe('true')
+    for (const control of [quantityInput(), priceInput(), nutritionInput(), saveButton(),
+      screen.getByRole('button', { name: 'Review entry' })]) expect(control.matches(':disabled')).toBe(true)
+    await user.type(quantityInput(), '9')
+    fireEvent.submit(document.querySelector('form')!)
+    expect(quantityInput().value).toBe('1')
+    expect(reviewStatus().textContent).toBe('')
+    expect(onSave).not.toHaveBeenCalled()
+    update({ submitting: false })
+    expect(priceInput().value).toBe('8.50')
+    expect(nutritionInput().value).toBe(JSON.stringify(['reviewed', 'illustrative-product', 1]))
+    expect(saveButton().disabled).toBe(false)
+  })
+
+  it.each([
+    ['Earlier occurrence', '2026-11-01T05:30:00.000Z'],
+    ['Later occurrence', '2026-11-01T06:30:00.000Z'],
+  ])('requires a repeated-time choice and saves the selected %s as UTC', async (label, consumedAt) => {
+    const { user, onSave } = renderSavingForm({
+      timeZone: 'America/New_York', initialLocalDateTime: '2026-11-01T01:30',
+    })
+    await selectReference(user)
+    await user.type(priceInput(), '0')
+    expect(saveButton().disabled).toBe(true)
+    await user.click(screen.getByRole('radio', { name: new RegExp(label) }))
+    expect(saveButton().disabled).toBe(false)
+    await user.click(saveButton())
+    expect(onSave.mock.calls[0][0].entry.consumedAt).toBe(consumedAt)
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: new RegExp(label) }).checked).toBe(true)
+  })
+
+  it('saves the pinned reviewed version after publication and uses newer values only after explicit adoption', async () => {
+    const first = makeReference()
+    const second = { ...first, version: 2, sugarGramsPer100Ml: 11,
+      source: { label: 'Revised illustrative source', url: 'https://example.invalid/revision' } }
+    const { user, onSave, update } = renderSavingForm({ references: [first] })
+    await selectReference(user)
+    await user.type(priceInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Review entry' }))
+    update({ references: [second] })
+    await user.click(saveButton())
+    expect(onSave.mock.calls[0][0].entry.nutrition.referenceVersion).toBe(1)
+    expect(onSave.mock.calls[0][0].nutritionProvenance.reference).toEqual(first)
+    expect(screen.getByText('Updated nutrition is available.')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Use latest values' }))
+    expect(reviewStatus().textContent).toBe('')
+    await user.click(saveButton())
+    expect(onSave.mock.calls[1][0].entry.nutrition.referenceVersion).toBe(2)
+    expect(onSave.mock.calls[1][0].nutritionProvenance.reference).toEqual(second)
+    expect(onSave.mock.calls[0][0].nutritionProvenance.reference).toEqual(first)
+  })
+
+  it('retains user-provided provenance and explicit zero nutrition rates in a real prepared record', async () => {
+    const personal = makePersonalSetup(1, { sugarGramsPer100Ml: 0, kcalPer100Ml: 0 })
+    const { user, onSave } = renderSavingForm({ references: [], personalNutrition: personal })
+    await user.selectOptions(nutritionInput(), nutritionKey(personal))
+    await user.type(priceInput(), '0')
+    await user.click(saveButton())
+    const record = onSave.mock.calls[0][0]
+    expect(record.nutritionProvenance.kind).toBe('user-provided')
+    expect(record.entry.nutrition.sugarGramsPer100Ml).toBe(0)
+    expect(record.entry.nutrition.kcalPer100Ml).toBe(0)
+    expect(record.nutritionProvenance.reference.source).toEqual(personal.reference.source)
+  })
+
+  it('notifies the parent about edits while keeping the existing form values', async () => {
+    const onDraftChange = vi.fn()
+    const { user } = renderSavingForm({ onDraftChange })
+    await user.type(priceInput(), '3')
+    expect(onDraftChange).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    expect(onDraftChange).toHaveBeenCalledTimes(2)
+    expect(priceInput().value).toBe('3')
+    expect(quantityInput().value).toBe('2')
+  })
+
+  it.each([false, true])('never focuses invalid form controls when Log is inactive or hidden (ancestor hidden: %s)', hidden => {
+    const outside = document.createElement('button')
+    outside.textContent = 'Outside Log'
+    document.body.append(outside)
+    render(<div hidden={hidden}>
+      <DrinkEntryForm references={[makeReference()]} currency="BDT" timeZone="Asia/Dhaka"
+        initialLocalDateTime="2026-11-08T00:05" draftId="illustrative-hidden-draft" isActive={hidden} />
+    </div>)
+    outside.focus()
+    fireEvent.submit(document.querySelector('form')!)
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
   })
 })

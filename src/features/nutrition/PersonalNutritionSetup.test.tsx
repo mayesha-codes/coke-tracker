@@ -80,7 +80,7 @@ describe('personal nutrition label inputs', () => {
     expect(nutritionStatus().textContent).toBe('')
     expect(screen.getByText('User-provided — not independently verified.')).toBeDefined()
     expect(screen.getByText(/temporary and clears on refresh/)).toBeDefined()
-    expect(screen.getByText(/saving drinks is still unavailable/)).toBeDefined()
+    expect(screen.getByText(/save drinks for this session/)).toBeDefined()
   })
 
   it('keeps typed text local until Apply and accepts explicit zero values with an omitted URL', async () => {
@@ -255,6 +255,7 @@ describe('applied personal setup and committed feedback', () => {
     const context: SessionContextValue = {
       state, applyPersonalNutrition, lastNutritionResult: null,
       updatePreferences: vi.fn(), lastPreferenceResult: null,
+      addEntry: vi.fn(), lastEntryResult: null,
     }
     const view = render(<SessionContext.Provider value={context}><PersonalNutritionSetup /></SessionContext.Provider>)
     fillDraft()
@@ -275,6 +276,7 @@ describe('applied personal setup and committed feedback', () => {
     const context: SessionContextValue = {
       state, applyPersonalNutrition: vi.fn(), lastNutritionResult: null,
       updatePreferences: vi.fn(), lastPreferenceResult: null,
+      addEntry: vi.fn(), lastEntryResult: null,
     }
     const view = render(<SessionContext.Provider value={context}><PersonalNutritionSetup /></SessionContext.Provider>)
     fillDraft()
@@ -294,6 +296,7 @@ describe('applied personal setup and committed feedback', () => {
     const context: SessionContextValue = {
       state, applyPersonalNutrition: vi.fn(), lastNutritionResult: null,
       updatePreferences: vi.fn(), lastPreferenceResult: null,
+      addEntry: vi.fn(), lastEntryResult: null,
     }
     const view = render(<SessionContext.Provider value={context}><PersonalNutritionSetup /></SessionContext.Provider>)
     fillDraft()

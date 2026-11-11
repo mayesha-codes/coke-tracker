@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createNutritionReference } from '../../domain/nutrition'
 import type { PersonalNutritionSetup } from '../../app/session/sessionState'
+import { createSessionState, transitionSession } from '../../app/session/sessionState'
+import type { SessionState } from '../../app/session/sessionState'
+import type { EntrySaveReceipt, EntrySaveRequest } from '../../app/session/sessionContext'
 import LogPage from './LogPage'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const initialization = { initialReferenceUtc: '2026-11-07T18:05:00Z', draftId: 'page-test-draft' }
 
@@ -21,7 +25,7 @@ function personalSetup(): PersonalNutritionSetup {
   return Object.freeze({ kind: 'user-provided', reference: checked.reference })
 }
 
-describe('the preview-only Log page', () => {
+describe('the Log page draft', () => {
   it('offers exactly the reviewed Great Britain product without choosing it for the user', () => {
     render(<LogPage {...initialization} />)
     const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' })
@@ -70,7 +74,7 @@ describe('the preview-only Log page', () => {
   it('provides the shell heading and an honest empty nutrition catalog', () => {
     render(<LogPage {...initialization} references={[]} />)
     expect(screen.getByRole('heading', { level: 1 }).id).toBe('view-heading')
-    expect(screen.getByText('Preview mode')).toBeDefined()
+    expect(screen.getByText('Session logging')).toBeDefined()
     expect(screen.getByLabelText(/coke product/i)).toHaveProperty('disabled', true)
     expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
     expect(screen.queryByText('Ready to save — not saved yet.')).toBeNull()
@@ -163,5 +167,192 @@ describe('the preview-only Log page', () => {
     expect(within(preview).getByText('1,000', { exact: false })).toBeDefined()
     expect(within(preview).getAllByText('Choose a nutrition reference to see estimates.')).toHaveLength(2)
     expect(screen.queryByText('Updated nutrition is available.')).toBeNull()
+  })
+})
+
+function emptySession(): SessionState {
+  const result = createSessionState()
+  if (result.valid === false) throw new Error('Expected test session preferences.')
+  return result.state
+}
+
+function acceptedReceipt(request: EntrySaveRequest, state = emptySession()): EntrySaveReceipt {
+  const result = transitionSession(state, { type: 'add-entry', record: request.record })
+  if (result.outcome !== 'accepted') throw new Error('Expected an accepted test record.')
+  return { requestId: request.requestId, result }
+}
+
+function controlledPage(options: { timeZone?: string; personalNutrition?: PersonalNutritionSetup; draftId?: string; strict?: boolean } = {}) {
+  const addEntry = vi.fn<(request: EntrySaveRequest) => void>()
+  let receipt: EntrySaveReceipt | null = null
+  let active = true
+  const content = () => <LogPage {...initialization} {...options} addEntry={addEntry} lastEntryResult={receipt} isActive={active} />
+  const view = render(options.strict ? <StrictMode>{content()}</StrictMode> : content())
+  return {
+    addEntry,
+    request() { return addEntry.mock.calls[addEntry.mock.calls.length - 1][0] },
+    publish(next: EntrySaveReceipt | null, isActive = active) {
+      receipt = next
+      active = isActive
+      view.rerender(options.strict ? <StrictMode>{content()}</StrictMode> : content())
+    },
+  }
+}
+
+async function completeDraft(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole('textbox', { name: /Total paid for all drinks/ }), '0')
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Coke product' }),
+    JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
+}
+
+describe('request-matched temporary drink saving', () => {
+  it('requires complete data, guards rapid clicks, and waits for accepted state before confirming', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    const save = screen.getByRole('button', { name: 'Save entry' })
+    expect(save).toHaveProperty('disabled', true)
+    await completeDraft(user)
+    expect(save).toHaveProperty('disabled', false)
+    act(() => { fireEvent.click(save); fireEvent.click(save) })
+    expect(page.addEntry).toHaveBeenCalledTimes(1)
+    const request = page.request()
+    expect(request.record.entry.id).toBe(initialization.draftId)
+    expect(request.record.entry.totalPriceMinor).toBe(0)
+    expect(request.record.nutritionProvenance.kind).toBe('reviewed')
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(screen.getByRole('textbox', { name: 'Quantity' }).matches(':disabled')).toBe(true)
+    page.publish(acceptedReceipt({ ...request, requestId: 'unrelated-request' }))
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    const accepted = acceptedReceipt(request)
+    page.publish(accepted)
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(screen.queryByRole('textbox', { name: 'Quantity' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Draft preview' })).toBeNull()
+    expect(document.activeElement?.id).toBe('logging-saved-heading')
+  })
+
+  it('ignores a matching accepted receipt for the wrong entry and consumes the correct receipt only once', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const request = page.request()
+    const wrong = { ...request, record: { ...request.record, entry: { ...request.record.entry, id: 'another-entry' } } }
+    page.publish(acceptedReceipt(wrong))
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    const correct = acceptedReceipt(request)
+    page.publish(correct)
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    page.publish({ ...correct })
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).toHaveProperty('value', '')
+    expect(screen.getByRole('textbox', { name: 'Quantity' })).toHaveProperty('value', '1')
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: '330 ml' }))
+  })
+
+  it.each(['invalid', 'duplicate'] as const)('keeps all editable fields after a %s result and retries with the same entry ID', async outcome => {
+    const user = userEvent.setup()
+    const personal = personalSetup()
+    const page = controlledPage({ timeZone: 'America/New_York', personalNutrition: personal })
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(screen.getByLabelText('Custom serving size (ml)'), { target: { value: ' 00375 ' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Quantity' }), { target: { value: '02' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /Total paid for all drinks/ }), { target: { value: '25.50' } })
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    fireEvent.change(screen.getByLabelText('Consumption date and time'), { target: { value: '2024-11-03T01:30' } })
+    await user.click(screen.getByRole('radio', { name: /Later occurrence/ }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Coke product' }), JSON.stringify(['user-provided', personal.reference.id, 1]))
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const first = page.request()
+    let result
+    if (outcome === 'duplicate') {
+      const accepted = acceptedReceipt(first)
+      result = transitionSession(accepted.result.state, { type: 'add-entry', record: first.record })
+    } else {
+      result = transitionSession(emptySession(), { type: 'add-entry', record: { ...first.record, entry: { ...first.record.entry, quantity: 0 } } })
+    }
+    expect(result.outcome).toBe(outcome)
+    page.publish({ requestId: first.requestId, result })
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(document.activeElement?.id).toBe('logging-save-error')
+    expect(screen.getByLabelText('Custom serving size (ml)')).toHaveProperty('value', ' 00375 ')
+    expect(screen.getByRole('textbox', { name: 'Quantity' })).toHaveProperty('value', '02')
+    expect(screen.getByRole('textbox', { name: /Total paid for all drinks/ })).toHaveProperty('value', '25.50')
+    expect(screen.getByRole('radio', { name: 'Price unknown' })).toHaveProperty('checked', true)
+    expect(screen.getByRole('radio', { name: /Later occurrence/ })).toHaveProperty('checked', true)
+    expect(screen.getByLabelText('Consumption date and time')).toHaveProperty('value', '2024-11-03T01:30')
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const retry = page.request()
+    expect(retry.requestId).not.toBe(first.requestId)
+    expect(retry.record).toEqual(first.record)
+    expect(retry.record.entry.consumedAt).toBe('2024-11-03T06:30:00.000Z')
+    expect(retry.record.entry.totalPriceMinor).toBeNull()
+    expect(retry.record.nutritionProvenance.reference).toEqual(personal.reference)
+  })
+
+  it('displays aggregate-session rejection without clearing an otherwise valid draft', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    await completeDraft(user)
+    fireEvent.change(screen.getByRole('textbox', { name: /Total paid for all drinks/ }), { target: { value: '0.01' } })
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const request = page.request()
+    const initial = acceptedReceipt({ ...request, record: { ...request.record, entry: { ...request.record.entry, id: 'existing-large-price', totalPriceMinor: Number.MAX_SAFE_INTEGER } } })
+    const result = transitionSession(initial.result.state, { type: 'add-entry', record: request.record })
+    expect(result.outcome).toBe('invalid')
+    page.publish({ requestId: request.requestId, result })
+    expect(screen.getByRole('alert').textContent).toContain('Known spending for this currency exceeds the safe integer range.')
+    expect(screen.getByRole('textbox', { name: /Total paid for all drinks/ })).toHaveProperty('value', '0.01')
+    expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', false)
+  })
+
+  it('keeps input when initial UUID generation fails and retries ID setup without remounting the form', async () => {
+    const user = userEvent.setup()
+    const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => { throw new Error('Unavailable') })
+    const addEntry = vi.fn()
+    render(<LogPage initialReferenceUtc={initialization.initialReferenceUtc} addEntry={addEntry} />)
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Increase quantity' }))
+    expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', true)
+    uuid.mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+    await user.click(screen.getByRole('button', { name: 'Retry ID setup' }))
+    expect(screen.getByRole('textbox', { name: 'Quantity' })).toHaveProperty('value', '2')
+    expect(screen.getByRole('textbox', { name: /Total paid for all drinks/ })).toHaveProperty('value', '0')
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).not.toHaveProperty('value', '')
+    expect(screen.getByRole('button', { name: 'Save entry' })).toHaveProperty('disabled', false)
+    uuid.mockReturnValueOnce('22222222-2222-4222-8222-222222222222')
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    expect(addEntry.mock.calls[0][0].record.entry.id).toBe('11111111-1111-4111-8111-111111111111')
+  })
+
+  it('retains a saved confirmation if restarting cannot generate a UUID, then recovers deliberately', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    page.publish(acceptedReceipt(page.request()))
+    const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => { throw new Error('Unavailable') })
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(screen.getByRole('alert').textContent).toContain('saved entry is unchanged')
+    expect(document.activeElement?.id).toBe('logging-restart-error')
+    uuid.mockReturnValueOnce('33333333-3333-4333-8333-333333333333')
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).toHaveProperty('value', '')
+  })
+
+  it('does not steal focus when an acknowledgement arrives while Log is inactive', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage({ strict: true })
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const focused = document.activeElement
+    page.publish(acceptedReceipt(page.request()), false)
+    expect(document.activeElement?.id).not.toBe('logging-saved-heading')
+    // The removed Save button may return focus to body; it must never focus inactive Log.
+    expect(document.activeElement === focused || document.activeElement === document.body).toBe(true)
+    page.publish(null, true)
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
   })
 })
