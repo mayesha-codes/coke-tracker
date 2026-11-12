@@ -9,7 +9,7 @@ import { useSession } from './app/session/sessionContext'
 import { createSessionState, transitionSession } from './app/session/sessionState'
 import type { SessionEntryRecord, SessionState } from './app/session/sessionState'
 import { createDrinkEntry } from './domain/entries'
-import type { TrackingSettings } from './domain/types'
+import type { CreateDrinkEntryInput, TrackingSettings } from './domain/types'
 import type { PersonalNutritionDraft } from './features/nutrition/nutritionInput'
 
 const referenceTime = '2026-11-08T09:30:00.000Z'
@@ -697,12 +697,189 @@ function savedSessionEntries(): readonly SessionEntryRecord[] {
   return JSON.parse(screen.getByTestId('test-session-history').textContent ?? '[]')
 }
 
+function recentEntriesRegion() {
+  return screen.getByRole('region', { name: 'Recent session entries' })
+}
+
+function recentEntryCards() {
+  return within(recentEntriesRegion()).queryAllByRole('listitem')
+}
+
+function recentEntryText(card: HTMLElement) {
+  return card.textContent?.replace(/\s+/g, ' ') ?? ''
+}
+
+/** Seed accepted history with illustrative label data, using the same pure session boundary. */
+function withIllustrativeSavedEntry(state: SessionState, overrides: Partial<CreateDrinkEntryInput> = {}): SessionState {
+  const provenance = state.personalNutrition
+  if (provenance === null) throw new Error('Expected an illustrative personal setup.')
+  const created = createDrinkEntry({
+    id: `illustrative-recent-${state.entries.length + 1}`,
+    consumedAt: referenceTime, quantity: 2, servingMl: 375,
+    totalPriceMinor: 300, currency: 'JPY', ...overrides,
+  }, provenance.reference)
+  if (created.valid === false) throw new Error('Expected an illustrative drink entry.')
+  const result = transitionSession(state, {
+    type: 'add-entry', record: { entry: created.entry, nutritionProvenance: provenance },
+  })
+  if (result.outcome !== 'accepted') throw new Error('Expected accepted illustrative history.')
+  return result.state
+}
+
 async function readyPersonalEntry(user: ReturnType<typeof userEvent.setup>) {
   await navigate(user, 'Log')
   await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
   await selectPersonalNutrition(user)
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save entry' }).disabled).toBe(false)
 }
+
+describe('recent session entries connected to shared history', () => {
+  it('starts with an honest empty state and no list-triggered success announcement', async () => {
+    const { user } = renderApp()
+    await navigate(user, 'Log')
+    expect(recentEntryCards()).toHaveLength(0)
+    expect(within(recentEntriesRegion()).getByText(/No drinks saved this session/)).toBeDefined()
+    expect(within(recentEntriesRegion()).queryByRole('status')).toBeNull()
+    expect(recentEntriesRegion().querySelector('[aria-live]')).toBeNull()
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(recentEntriesRegion().contains(document.activeElement)).toBe(false)
+  })
+
+  it('keeps previous drinks visible after Log another and orders a newly saved backdated drink first', async () => {
+    const { user } = renderApp({ initialState: personalState(), controls: true })
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Custom' }))
+    fireEvent.change(customServingInput(), { target: { value: '375' } })
+    fireEvent.change(quantityInput(), { target: { value: '2' } })
+    await user.type(priceInput(), '300')
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const first = savedSessionEntries()[0]
+    expect(recentEntryCards()).toHaveLength(1)
+    expect(recentEntryCards()[0].textContent).toContain('750 ml')
+    expect(recentEntryText(recentEntryCards()[0])).toContain('JPY 300')
+    expect(screen.getAllByText('Saved for this session only.')).toHaveLength(1)
+    expect(within(recentEntriesRegion()).queryByRole('status')).toBeNull()
+    expect(document.activeElement?.id).toBe('logging-saved-heading')
+
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    expect(recentEntryCards()).toHaveLength(1)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: '330 ml' }))
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    fireEvent.change(dateTimeInput(), { target: { value: '2026-10-01T08:15' } })
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const records = savedSessionEntries()
+    const cards = recentEntryCards()
+    expect(cards).toHaveLength(2)
+    expect(cards.map(card => card.querySelector('time')?.dateTime))
+      .toEqual([records[1].entry.consumedAt, first.entry.consumedAt])
+    expect(Date.parse(records[1].entry.consumedAt)).toBeLessThan(Date.parse(first.entry.consumedAt))
+    expect(recentEntryText(cards[0])).toContain('Unknown (JPY)')
+    expect(recentEntryText(cards[1])).toContain('JPY 300')
+    expect(screen.getAllByText('Saved for this session only.')).toHaveLength(1)
+  })
+
+  it('retains cards across navigation and reformats time after preferences reset the draft without rewriting history', async () => {
+    const first = withIllustrativeSavedEntry(personalState(), {
+      consumedAt: '2026-11-07T09:00:00Z', currency: 'USD', totalPriceMinor: 250,
+    })
+    const initialState = withIllustrativeSavedEntry(first, {
+      consumedAt: '2026-11-07T18:30:00Z', currency: 'JPY', totalPriceMinor: 0,
+    })
+    const before = structuredClone(initialState.entries)
+    const { user } = renderApp({ initialState, controls: true })
+    await navigate(user, 'Log')
+    const originalTimes = recentEntryCards().map(card => ({
+      utc: card.querySelector('time')?.dateTime, text: card.querySelector('time')?.textContent,
+    }))
+    expect(recentEntryText(recentEntryCards()[0])).toContain('JPY 0')
+    expect(recentEntryText(recentEntryCards()[1])).toContain('USD 2.50')
+    await user.type(priceInput(), '300')
+    for (const view of ['Home', 'History', 'Settings', 'Log'] as const) await navigate(user, view)
+    expect(priceInput().value).toBe('300')
+    expect(recentEntryCards().map(card => card.querySelector('time')?.dateTime))
+      .toEqual(originalTimes.map(time => time.utc))
+    await navigate(user, 'Settings')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Currency' }), 'EUR')
+    fireEvent.change(screen.getByLabelText('Reporting timezone', { exact: true }), { target: { value: 'America/New_York' } })
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    await navigate(user, 'Log')
+    expect(priceInput().value).toBe('')
+    expect(nutritionSelect().value).toBe('')
+    const reformatted = recentEntryCards().map(card => ({
+      utc: card.querySelector('time')?.dateTime, text: card.querySelector('time')?.textContent,
+    }))
+    expect(reformatted.map(time => time.utc)).toEqual(originalTimes.map(time => time.utc))
+    expect(reformatted.map(time => time.text)).not.toEqual(originalTimes.map(time => time.text))
+    expect(recentEntriesRegion().textContent).toContain('America/New_York')
+    expect(recentEntryText(recentEntryCards()[0])).toContain('JPY 0')
+    expect(recentEntryText(recentEntryCards()[1])).toContain('USD 2.50')
+    expect(savedSessionEntries()).toEqual(before)
+    expect(initialState.entries).toEqual(before)
+    expect(Object.isFrozen(initialState.entries[0].entry.nutrition)).toBe(true)
+  })
+
+  it('keeps a historical nutrition version and source after Settings publishes different personal values', async () => {
+    const initialState = withIllustrativeSavedEntry(personalState())
+    const before = structuredClone(initialState.entries)
+    const { user } = renderApp({ initialState, controls: true })
+    await navigate(user, 'Settings')
+    fillNutritionSettings({
+      sugarGramsPer100MlText: '11', kcalPer100MlText: '43',
+      sourceDescription: 'New illustrative source', sourceUrl: 'https://example.invalid/new-source',
+    })
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await navigate(user, 'Log')
+    const card = recentEntryCards()[0]
+    expect(within(card).getByText('Nutrition version 1')).toBeDefined()
+    expect(within(card).queryByText('Nutrition version 2')).toBeNull()
+    await user.click(within(card).getByText('Source details', { selector: 'summary' }))
+    expect(within(card).getByRole('link', { name: 'Illustrative package label' }).getAttribute('href'))
+      .toBe('https://example.invalid/personal-label')
+    expect(within(card).queryByText('New illustrative source')).toBeNull()
+    expect(savedSessionEntries()).toEqual(before)
+    expect(initialState.entries[0].nutritionProvenance.reference.version).toBe(1)
+    expect(Object.isFrozen(initialState.entries[0].nutritionProvenance.reference.source)).toBe(true)
+  })
+
+  it.each(['duplicate ID', 'aggregate spending overflow'] as const)('does not add a recent card after a rejected save caused by %s', async cause => {
+    const existingId = '312f6a55-e737-41b3-b067-43c8537ef314'
+    const initialState = withIllustrativeSavedEntry(personalState(), {
+      id: existingId,
+      totalPriceMinor: cause === 'aggregate spending overflow' ? Number.MAX_SAFE_INTEGER : 300,
+    })
+    if (cause === 'duplicate ID') {
+      vi.spyOn(globalThis.crypto, 'randomUUID')
+        .mockReturnValueOnce(existingId)
+        .mockReturnValue('303e7a77-e6b6-4fea-8af7-d132570497be')
+    }
+    const { user } = renderApp({ initialState, controls: true })
+    await navigate(user, 'Log')
+    if (cause === 'duplicate ID') await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    else await user.type(priceInput(), '1')
+    await selectPersonalNutrition(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    expect(screen.getByRole('heading', { name: 'Entry was not saved' })).toBeDefined()
+    expect(recentEntryCards()).toHaveLength(1)
+    expect(savedSessionEntries()).toEqual(initialState.entries)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(recentEntriesRegion().contains(document.activeElement)).toBe(false)
+    expect(document.activeElement?.id).toBe('logging-save-error')
+  })
+
+  it('clears recent session history when the provider is mounted fresh', async () => {
+    const first = renderApp({ initialState: withIllustrativeSavedEntry(personalState()) })
+    await navigate(first.user, 'Log')
+    expect(recentEntryCards()).toHaveLength(1)
+    first.unmount()
+    const fresh = renderApp()
+    await navigate(fresh.user, 'Log')
+    expect(recentEntryCards()).toHaveLength(0)
+    expect(within(recentEntriesRegion()).getByText(/No drinks saved this session/)).toBeDefined()
+  })
+})
 
 describe('temporary saving through the application and shared session', () => {
   it.each(['known zero', 'unknown'] as const)('saves a reviewed product with a %s total price', async mode => {

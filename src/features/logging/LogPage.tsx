@@ -8,8 +8,11 @@ import type { CurrencyCode, NutritionCatalogReference, UtcTimestamp } from '../.
 import { isIdentifier, normalizeUtcTimestamp } from '../../domain/validation'
 import DrinkEntryForm from './DrinkEntryForm'
 import SavedEntryConfirmation from './SavedEntryConfirmation'
+import RecentSessionEntries from './RecentSessionEntries'
 import { REVIEWED_REFERENCES } from '../nutrition/reviewedProducts'
 import './logging.css'
+
+const EMPTY_SESSION_ENTRIES: readonly SessionEntryRecord[] = Object.freeze([])
 
 type LogPageProps = {
   references?: readonly NutritionCatalogReference[]
@@ -25,6 +28,7 @@ type LogPageProps = {
   addEntry?: (request: EntrySaveRequest) => void
   lastEntryResult?: EntrySaveReceipt | null
   isActive?: boolean
+  entries?: readonly SessionEntryRecord[]
 }
 
 type SaveState =
@@ -72,6 +76,7 @@ function LogPage({
   addEntry,
   lastEntryResult = null,
   isActive = true,
+  entries = EMPTY_SESSION_ENTRIES,
 }: LogPageProps) {
   // Clock and identifier generation are confined to the UI boundary, once per mounted draft.
   const [draft, setDraft] = useState(() => ({
@@ -216,6 +221,7 @@ function LogPage({
           onDraftChange={() => { if (saving.status === 'failed') setSaving({ status: 'editing' }) }}
         />
       </section>}
+      <RecentSessionEntries entries={entries} timeZone={timeZone} />
     </div>
   )
 }

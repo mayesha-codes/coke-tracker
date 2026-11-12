@@ -61,6 +61,7 @@ function App() {
             currency={currency}
             timeZone={reportingTimeZone}
             personalNutrition={state.personalNutrition}
+            entries={state.entries}
             headingId={activeView === 'log' ? 'view-heading' : 'log-view-heading'}
             draftWasReset={draftPreferences.wasReset}
             addEntry={addEntry}

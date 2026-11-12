@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createNutritionReference } from '../../domain/nutrition'
-import type { PersonalNutritionSetup } from '../../app/session/sessionState'
+import type { PersonalNutritionSetup, SessionEntryRecord } from '../../app/session/sessionState'
 import { createSessionState, transitionSession } from '../../app/session/sessionState'
 import type { SessionState } from '../../app/session/sessionState'
 import type { EntrySaveReceipt, EntrySaveRequest } from '../../app/session/sessionContext'
@@ -182,11 +182,12 @@ function acceptedReceipt(request: EntrySaveRequest, state = emptySession()): Ent
   return { requestId: request.requestId, result }
 }
 
-function controlledPage(options: { timeZone?: string; personalNutrition?: PersonalNutritionSetup; draftId?: string; strict?: boolean } = {}) {
+function controlledPage(options: { timeZone?: string; personalNutrition?: PersonalNutritionSetup; draftId?: string; strict?: boolean; entries?: readonly SessionEntryRecord[] } = {}) {
   const addEntry = vi.fn<(request: EntrySaveRequest) => void>()
   let receipt: EntrySaveReceipt | null = null
   let active = true
-  const content = () => <LogPage {...initialization} {...options} addEntry={addEntry} lastEntryResult={receipt} isActive={active} />
+  let entries = options.entries
+  const content = () => <LogPage {...initialization} {...options} entries={entries} addEntry={addEntry} lastEntryResult={receipt} isActive={active} />
   const view = render(options.strict ? <StrictMode>{content()}</StrictMode> : content())
   return {
     addEntry,
@@ -194,6 +195,10 @@ function controlledPage(options: { timeZone?: string; personalNutrition?: Person
     publish(next: EntrySaveReceipt | null, isActive = active) {
       receipt = next
       active = isActive
+      view.rerender(options.strict ? <StrictMode>{content()}</StrictMode> : content())
+    },
+    updateEntries(next: readonly SessionEntryRecord[]) {
+      entries = next
       view.rerender(options.strict ? <StrictMode>{content()}</StrictMode> : content())
     },
   }
@@ -204,6 +209,63 @@ async function completeDraft(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(screen.getByRole('combobox', { name: 'Coke product' }),
     JSON.stringify(['reviewed', 'coca-cola-original-taste-gb', 1]))
 }
+
+describe('recent entries alongside the retained Log interface', () => {
+  it('shows an empty recent-entries region after the editable form without another success announcement', () => {
+    render(<LogPage {...initialization} />)
+    const form = screen.getByRole('region', { name: 'Drink entry form' })
+    const recent = screen.getByRole('region', { name: 'Recent session entries' })
+    expect(form.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(recent).queryAllByRole('listitem')).toHaveLength(0)
+    expect(within(recent).getByText('No drinks saved this session yet.')).toBeDefined()
+    expect(within(recent).queryByRole('status')).toBeNull()
+    expect(within(recent).queryByText('Saved for this session only.')).toBeNull()
+  })
+
+  it('keeps accepted records below the confirmation and the new draft after Log another drink', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const receipt = acceptedReceipt(page.request())
+    page.publish(receipt)
+    // Only records supplied from shared state populate the list, not a retained receipt.
+    const recent = screen.getByRole('region', { name: 'Recent session entries' })
+    expect(within(recent).queryAllByRole('listitem')).toHaveLength(0)
+    page.updateEntries(receipt.result.state.entries)
+    const confirmation = screen.getByRole('region', { name: 'Your drink is logged.' })
+    expect(confirmation.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(recent).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.getAllByText('Saved for this session only.')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Log another drink' }))
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).toHaveProperty('value', '')
+    expect(within(recent).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: '330 ml' }))
+  })
+
+  it('does not change an unfinished draft or move focus when shared entries update', async () => {
+    const user = userEvent.setup()
+    const page = controlledPage()
+    await completeDraft(user)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    const accepted = acceptedReceipt(page.request())
+    // A rejected request leaves this form editable, while another accepted record can be displayed.
+    const result = transitionSession(accepted.result.state, { type: 'add-entry', record: page.request().record })
+    page.publish({ requestId: page.request().requestId, result })
+    const price = screen.getByRole<HTMLInputElement>('textbox', { name: /Total paid for all drinks/ })
+    await user.clear(price)
+    await user.type(price, '25.50')
+    const selected = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Coke product' }).value
+    const focused = document.activeElement
+    page.updateEntries(accepted.result.state.entries)
+    expect(document.activeElement).toBe(focused)
+    expect(price.value).toBe('25.50')
+    expect(screen.getByRole('combobox', { name: 'Coke product' })).toHaveProperty('value', selected)
+    expect(within(screen.getByRole('region', { name: 'Recent session entries' })).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.queryByText('Saved for this session only.')).toBeNull()
+  })
+})
 
 describe('request-matched temporary drink saving', () => {
   it('requires complete data, guards rapid clicks, and waits for accepted state before confirming', async () => {
