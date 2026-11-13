@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   getCalendarDayPeriod,
   getCalendarMonthPeriod,
+  getCalendarPeriodForDate,
   getCalendarWeekPeriod,
 } from './periods'
 import type { PeriodResult, ReportingPeriod, ReportingPeriodKind } from './periods'
@@ -35,6 +36,77 @@ function expectIssueFields(result: PeriodResult, fields: readonly string[]) {
     expect(issue.message.trim()).not.toBe('')
   }
 }
+
+describe('calendar periods from civil dates', () => {
+  it('interprets a daily date in Dhaka rather than as UTC midnight', () => {
+    expectPeriod(getCalendarPeriodForDate('2026-11-13', 'day', 'Asia/Dhaka'), 'day', 'Asia/Dhaka',
+      '2026-11-12T18:00:00.000Z', '2026-11-13T18:00:00.000Z')
+  })
+
+  it('interprets a daily date in Tokyo', () => {
+    expectPeriod(getCalendarPeriodForDate('2026-11-13', 'day', 'Asia/Tokyo'), 'day', 'Asia/Tokyo',
+      '2026-11-12T15:00:00.000Z', '2026-11-13T15:00:00.000Z')
+  })
+
+  it('uses Monday through Sunday for a weekly date selection', () => {
+    expectPeriod(getCalendarPeriodForDate('2026-11-14', 'week', 'Asia/Dhaka'), 'week', 'Asia/Dhaka',
+      '2026-11-08T18:00:00.000Z', '2026-11-15T18:00:00.000Z')
+  })
+
+  it('handles leap day and the adjacent month boundary', () => {
+    expectPeriod(getCalendarPeriodForDate('2024-02-29', 'month', 'Asia/Dhaka'), 'month', 'Asia/Dhaka',
+      '2024-01-31T18:00:00.000Z', '2024-02-29T18:00:00.000Z')
+  })
+
+  it('handles a selected date at a year boundary', () => {
+    expectPeriod(getCalendarPeriodForDate('2026-12-31', 'month', 'UTC'), 'month', 'UTC',
+      '2026-12-01T00:00:00.000Z', '2027-01-01T00:00:00.000Z')
+  })
+
+  it.each([
+    { date: '2026-03-08', start: '2026-03-08T05:00:00.000Z', end: '2026-03-09T04:00:00.000Z', hours: 23 },
+    { date: '2026-11-01', start: '2026-11-01T04:00:00.000Z', end: '2026-11-02T05:00:00.000Z', hours: 25 },
+  ])('uses independently resolved New York boundaries for $date', ({ date, start, end, hours }) => {
+    const period = periodFrom(getCalendarPeriodForDate(date, 'day', 'America/New_York'))
+    expectPeriod({ valid: true, period }, 'day', 'America/New_York', start, end)
+    expect((Date.parse(period.endUtc) - Date.parse(period.startUtc)) / 3600000).toBe(hours)
+  })
+
+  it('uses an exclusive next-calendar-date boundary', () => {
+    const period = periodFrom(getCalendarPeriodForDate('2026-11-13', 'day', 'Asia/Tokyo'))
+    expect(Date.parse(period.endUtc) - Date.parse(period.startUtc)).toBe(24 * 60 * 60 * 1000)
+    expectPeriod(getCalendarPeriodForDate('2026-11-14', 'day', 'Asia/Tokyo'), 'day', 'Asia/Tokyo',
+      period.endUtc, '2026-11-14T15:00:00.000Z')
+  })
+
+  it.each([
+    '2026-2-03', '2026/02/03', ' 2026-02-03', '2026-02-03 ', '2026-02-30', '2026-02-29', '',
+  ])('rejects malformed or impossible civil date %s', date => {
+    expectIssueFields(getCalendarPeriodForDate(date, 'day', 'UTC'), ['period'])
+  })
+
+  it('rejects a skipped civil date in Apia instead of normalizing it to the next date', () => {
+    expectIssueFields(getCalendarPeriodForDate('2011-12-30', 'day', 'Pacific/Apia'), ['period'])
+  })
+
+  it('rejects unsupported period kinds and timezones', () => {
+    expectIssueFields(Reflect.apply(getCalendarPeriodForDate, undefined,
+      ['2026-11-13', 'year', 'Asia/Dhaka']), ['kind'])
+    expectIssueFields(getCalendarPeriodForDate('2026-11-13', 'day', 'Mars/Olympus'), ['timeZone'])
+  })
+
+  it('leaves the existing instant-based APIs using the same period boundaries', () => {
+    expect(getCalendarDayPeriod('2026-11-07T12:00:00Z', 'Asia/Dhaka')).toEqual(
+      getCalendarPeriodForDate('2026-11-07', 'day', 'Asia/Dhaka'),
+    )
+    expect(getCalendarWeekPeriod('2026-11-08T12:00:00Z', 'Asia/Dhaka')).toEqual(
+      getCalendarPeriodForDate('2026-11-08', 'week', 'Asia/Dhaka'),
+    )
+    expect(getCalendarMonthPeriod('2024-02-29T12:00:00Z', 'Asia/Dhaka')).toEqual(
+      getCalendarPeriodForDate('2024-02-29', 'month', 'Asia/Dhaka'),
+    )
+  })
+})
 
 describe('calendar day boundaries', () => {
   it('defaults to Dhaka and returns the whole local day as normalized UTC boundaries', () => {

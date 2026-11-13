@@ -35,6 +35,10 @@ function failure(field: PeriodIssue['field'], message: string): PeriodResult {
   return invalid([{ source: 'period', field, message, entryIndex: null }])
 }
 
+function isPeriodKind(value: unknown): value is ReportingPeriodKind {
+  return value === 'day' || value === 'week' || value === 'month'
+}
+
 /** UTC is used only as a neutral carrier of civil dates, not as the reporting zone. */
 function civilDate(year: number, month: number, day: number): Date {
   const date = new Date(0)
@@ -108,6 +112,52 @@ function resolveBoundary(date: Date, timeZone: string): number | null {
   return verified.length === 0 ? null : Math.min(...verified)
 }
 
+function buildCalendarPeriod(
+  referenceDate: Date,
+  timeZone: string,
+  kind: ReportingPeriodKind,
+  referenceInstant?: number,
+): PeriodResult {
+  try {
+    const startDate = new Date(referenceDate.getTime())
+    if (kind === 'week') {
+      const daysSinceMonday = (startDate.getUTCDay() + 6) % 7
+      startDate.setUTCDate(startDate.getUTCDate() - daysSinceMonday)
+    } else if (kind === 'month') {
+      startDate.setUTCDate(1)
+    }
+
+    const endDate = new Date(startDate.getTime())
+    if (kind === 'month') endDate.setUTCMonth(endDate.getUTCMonth() + 1)
+    else endDate.setUTCDate(endDate.getUTCDate() + (kind === 'week' ? 7 : 1))
+
+    const start = resolveBoundary(startDate, timeZone)
+    const startUtc = start === null ? null : normalizeUtcTimestamp(new Date(start).toISOString())
+    if (startUtc === null) {
+      return failure('startUtc', 'The start boundary could not be verified within the supported UTC range.')
+    }
+    const end = resolveBoundary(endDate, timeZone)
+    const endUtc = end === null ? null : normalizeUtcTimestamp(new Date(end).toISOString())
+    if (endUtc === null) {
+      return failure('endUtc', 'The end boundary could not be verified within the supported UTC range.')
+    }
+    if (start === null || end === null ||
+        (referenceInstant !== undefined && (referenceInstant < start || referenceInstant >= end)) ||
+        start >= end) {
+      return failure('period', referenceInstant === undefined
+        ? 'The calendar boundaries could not be verified around the reference date.'
+        : 'The calendar boundaries could not be verified around the reference instant.')
+    }
+
+    return Object.freeze({
+      valid: true,
+      period: Object.freeze({ kind, timeZone, startUtc, endUtc }),
+    })
+  } catch {
+    return failure('period', 'The timezone library could not reliably resolve this calendar period.')
+  }
+}
+
 function getCalendarPeriod(
   referenceUtc: UtcTimestamp,
   timeZone: string,
@@ -133,38 +183,52 @@ function getCalendarPeriod(
   try {
     const instant = new Date(reference).getTime()
     const local = new TZDateMini(instant, timeZone)
-    const startDate = civilDate(local.getFullYear(), local.getMonth(), local.getDate())
-    if (kind === 'week') {
-      const daysSinceMonday = (startDate.getUTCDay() + 6) % 7
-      startDate.setUTCDate(startDate.getUTCDate() - daysSinceMonday)
-    } else if (kind === 'month') {
-      startDate.setUTCDate(1)
-    }
-
-    const endDate = new Date(startDate.getTime())
-    if (kind === 'month') endDate.setUTCMonth(endDate.getUTCMonth() + 1)
-    else endDate.setUTCDate(endDate.getUTCDate() + (kind === 'week' ? 7 : 1))
-
-    const start = resolveBoundary(startDate, timeZone)
-    const startUtc = start === null ? null : normalizeUtcTimestamp(new Date(start).toISOString())
-    if (startUtc === null) {
-      return failure('startUtc', 'The start boundary could not be verified within the supported UTC range.')
-    }
-    const end = resolveBoundary(endDate, timeZone)
-    const endUtc = end === null ? null : normalizeUtcTimestamp(new Date(end).toISOString())
-    if (endUtc === null) {
-      return failure('endUtc', 'The end boundary could not be verified within the supported UTC range.')
-    }
-    if (start === null || end === null || start > instant || instant >= end || start >= end) {
-      return failure('period', 'The calendar boundaries could not be verified around the reference instant.')
-    }
-
-    return Object.freeze({
-      valid: true,
-      period: Object.freeze({ kind, timeZone, startUtc, endUtc }),
-    })
+    const date = civilDate(local.getFullYear(), local.getMonth(), local.getDate())
+    return buildCalendarPeriod(date, timeZone, kind, instant)
   } catch {
     return failure('period', 'The timezone library could not reliably resolve this calendar period.')
+  }
+}
+
+/**
+ * Build a calendar period from a local civil date such as `2026-11-14`.
+ * The date is interpreted in `timeZone`, never as UTC midnight.
+ */
+export function getCalendarPeriodForDate(
+  date: string,
+  kind: ReportingPeriodKind,
+  timeZone = DEFAULT_TRACKING_SETTINGS.reportingTimeZone,
+): PeriodResult {
+  const match = typeof date === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(date) : null
+  const year = match === null ? NaN : Number(match[1])
+  const month = match === null ? NaN : Number(match[2])
+  const day = match === null ? NaN : Number(match[3])
+  const parsedDate = match === null ? null : civilDate(year, month - 1, day)
+  if (parsedDate === null || parsedDate.getUTCFullYear() !== year ||
+      parsedDate.getUTCMonth() + 1 !== month || parsedDate.getUTCDate() !== day) {
+    return failure('period', 'Provide a real calendar date in YYYY-MM-DD format.')
+  }
+  if (!isPeriodKind(kind)) return failure('kind', 'Choose a supported calendar period kind.')
+  if (!isNamedTimeZone(timeZone)) {
+    return failure('timeZone', 'Provide a valid, supported IANA timezone name.')
+  }
+
+  try {
+    // A missing midnight can resolve forward within the requested date. Verify
+    // the date itself exists before anchoring a daily, weekly, or monthly period.
+    const dateStart = resolveBoundary(parsedDate, timeZone)
+    if (dateStart === null || localDateValue(dateStart, timeZone) !== parsedDate.getTime()) {
+      return failure('period', 'This calendar date does not exist in the selected timezone.')
+    }
+    const nextDate = new Date(parsedDate.getTime())
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+    const dateEnd = resolveBoundary(nextDate, timeZone)
+    if (dateEnd === null || dateEnd <= dateStart) {
+      return failure('period', 'The selected calendar date could not be verified in this timezone.')
+    }
+    return buildCalendarPeriod(parsedDate, timeZone, kind)
+  } catch {
+    return failure('period', 'The timezone library could not reliably resolve this calendar date.')
   }
 }
 
