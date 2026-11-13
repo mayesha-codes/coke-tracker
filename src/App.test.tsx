@@ -881,6 +881,45 @@ describe('recent session entries connected to shared history', () => {
   })
 })
 
+describe('History navigation uses the shared session state', () => {
+  it('retains saved entries after navigation and changes only displayed times when timezone preferences change', async () => {
+    const first = withIllustrativeSavedEntry(personalState(), {
+      consumedAt: '2026-11-07T09:00:00Z', currency: 'JPY', totalPriceMinor: 0,
+    })
+    const initialState = withIllustrativeSavedEntry(first, {
+      consumedAt: '2020-01-01T00:00:00Z', currency: 'USD', totalPriceMinor: null,
+    })
+    const originalEntries = structuredClone(initialState.entries)
+    const { user } = renderApp({ initialState, controls: true })
+
+    await navigate(user, 'History')
+    const list = screen.getByRole('region', { name: 'All entries' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(list).getAllByRole('listitem').map(item =>
+      within(item).getByRole('heading', { level: 2 }).textContent,
+    ))
+      .toEqual(['Illustrative personal can', 'Illustrative personal can'])
+    expect(within(list).getAllByText('Unknown (USD)')).toHaveLength(1)
+    expect(within(list).getAllByText('JPY 0')).toHaveLength(1)
+    const originalUtcTimes = within(list).getAllByRole('listitem').map(item => item.querySelector('time')?.dateTime)
+    expect(originalUtcTimes).toEqual(['2020-01-01T00:00:00.000Z', '2026-11-07T09:00:00.000Z'])
+
+    await navigate(user, 'Log')
+    await navigate(user, 'Home')
+    await navigate(user, 'History')
+    expect(within(screen.getByRole('region', { name: 'All entries' })).getAllByRole('listitem')).toHaveLength(2)
+
+    await user.click(screen.getByRole('button', { name: 'Use UTC in test' }))
+    expect(screen.getByText('Times shown in UTC')).toBeDefined()
+    const afterPreferenceChange = screen.getByRole('region', { name: 'All entries' })
+    expect(within(afterPreferenceChange).getAllByRole('listitem').map(item => item.querySelector('time')?.dateTime))
+      .toEqual(originalUtcTimes)
+    expect(within(afterPreferenceChange).getAllByText('Unknown (USD)')).toHaveLength(1)
+    expect(within(afterPreferenceChange).getAllByText('JPY 0')).toHaveLength(1)
+    expect(initialState.entries).toEqual(originalEntries)
+  })
+})
+
 describe('temporary saving through the application and shared session', () => {
   it.each(['known zero', 'unknown'] as const)('saves a reviewed product with a %s total price', async mode => {
     const { user } = renderApp({ controls: true })
