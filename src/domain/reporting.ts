@@ -2,6 +2,7 @@ import { validateDrinkEntry } from './entries'
 import { evaluateDailyVolumeGoal } from './goals'
 import type { DailyVolumeGoal, DailyVolumeGoalIssue } from './goals'
 import {
+  getCalendarDateRangePeriod,
   getCalendarDayPeriod,
   getCalendarMonthPeriod,
   getCalendarWeekPeriod,
@@ -77,13 +78,13 @@ function validatePeriod(input: unknown): PeriodResult {
   }
 
   const { kind, timeZone } = input
-  const validKind = kind === 'day' || kind === 'week' || kind === 'month'
+  const validKind = kind === 'day' || kind === 'week' || kind === 'month' || kind === 'custom'
   const validZone = typeof timeZone === 'string'
   const startUtc = normalizeUtcTimestamp(input.startUtc)
   const endUtc = normalizeUtcTimestamp(input.endUtc)
   const issues: PeriodIssue[] = []
   if (!validKind) {
-    issues.push({ source: 'period', field: 'kind', message: 'Use a day, week, or month period.', entryIndex: null })
+    issues.push({ source: 'period', field: 'kind', message: 'Use a day, week, month, or custom date-range period.', entryIndex: null })
   }
   if (!validZone) {
     issues.push({ source: 'period', field: 'timeZone', message: 'Provide a reporting timezone name.', entryIndex: null })
@@ -94,7 +95,16 @@ function validatePeriod(input: unknown): PeriodResult {
   if (endUtc === null) {
     issues.push({ source: 'period', field: 'endUtc', message: 'Provide a valid UTC end timestamp.', entryIndex: null })
   }
+  if (kind === 'custom' && typeof input.startDate !== 'string') {
+    issues.push({ source: 'period', field: 'startDate', message: 'Provide the custom period start date.', entryIndex: null })
+  }
+  if (kind === 'custom' && typeof input.endDate !== 'string') {
+    issues.push({ source: 'period', field: 'endDate', message: 'Provide the custom period end date.', entryIndex: null })
+  }
   if (!validKind || !validZone || startUtc === null || endUtc === null) return periodFailure(issues)
+  if (kind === 'custom' && (typeof input.startDate !== 'string' || typeof input.endDate !== 'string')) {
+    return periodFailure(issues)
+  }
 
   if (Date.parse(startUtc) >= Date.parse(endUtc)) {
     return periodFailure([{
@@ -102,9 +112,11 @@ function validatePeriod(input: unknown): PeriodResult {
     }])
   }
 
-  const expected = kind === 'day' ? getCalendarDayPeriod(startUtc, timeZone)
-    : kind === 'week' ? getCalendarWeekPeriod(startUtc, timeZone)
-      : getCalendarMonthPeriod(startUtc, timeZone)
+  const expected = kind === 'custom'
+    ? getCalendarDateRangePeriod(input.startDate as string, input.endDate as string, timeZone)
+    : kind === 'day' ? getCalendarDayPeriod(startUtc, timeZone)
+      : kind === 'week' ? getCalendarWeekPeriod(startUtc, timeZone)
+        : getCalendarMonthPeriod(startUtc, timeZone)
   if (expected.valid === false) return expected
 
   if (expected.period.startUtc !== startUtc) {

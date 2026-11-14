@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   getCalendarDayPeriod,
+  getCalendarDateRangePeriod,
   getCalendarMonthPeriod,
   getCalendarPeriodForDate,
   getCalendarWeekPeriod,
@@ -105,6 +106,88 @@ describe('calendar periods from civil dates', () => {
     expect(getCalendarMonthPeriod('2024-02-29T12:00:00Z', 'Asia/Dhaka')).toEqual(
       getCalendarPeriodForDate('2024-02-29', 'month', 'Asia/Dhaka'),
     )
+  })
+})
+
+describe('inclusive custom calendar date ranges', () => {
+  it('represents a same-day range as one local day with an exclusive next-date boundary', () => {
+    const result = getCalendarDateRangePeriod('2026-11-13', '2026-11-13', 'Asia/Dhaka')
+    expect(result).toEqual({
+      valid: true,
+      period: {
+        kind: 'custom', timeZone: 'Asia/Dhaka', startDate: '2026-11-13', endDate: '2026-11-13',
+        startUtc: '2026-11-12T18:00:00.000Z', endUtc: '2026-11-13T18:00:00.000Z',
+      },
+    })
+    if (result.valid) {
+      expect(Object.isFrozen(result)).toBe(true)
+      expect(Object.isFrozen(result.period)).toBe(true)
+    }
+  })
+
+  it('includes both selected dates in a multi-day Tokyo range', () => {
+    expect(getCalendarDateRangePeriod('2026-11-13', '2026-11-15', 'Asia/Tokyo')).toEqual({
+      valid: true,
+      period: {
+        kind: 'custom', timeZone: 'Asia/Tokyo', startDate: '2026-11-13', endDate: '2026-11-15',
+        startUtc: '2026-11-12T15:00:00.000Z', endUtc: '2026-11-15T15:00:00.000Z',
+      },
+    })
+  })
+
+  it('handles leap day and the next-month exclusive boundary', () => {
+    const result = getCalendarDateRangePeriod('2024-02-29', '2024-03-01', 'UTC')
+    expect(result).toMatchObject({ valid: true, period: {
+      startDate: '2024-02-29', endDate: '2024-03-01',
+      startUtc: '2024-02-29T00:00:00.000Z', endUtc: '2024-03-02T00:00:00.000Z',
+    } })
+  })
+
+  it('handles a range across New Year without changing the selected civil dates', () => {
+    expect(getCalendarDateRangePeriod('2026-12-31', '2027-01-01', 'Asia/Dhaka')).toMatchObject({
+      valid: true,
+      period: {
+        startDate: '2026-12-31', endDate: '2027-01-01',
+        startUtc: '2026-12-30T18:00:00.000Z', endUtc: '2027-01-01T18:00:00.000Z',
+      },
+    })
+  })
+
+  it.each([
+    { label: 'spring forward', startDate: '2026-03-08', endDate: '2026-03-09', hours: 47 },
+    { label: 'fall back', startDate: '2026-11-01', endDate: '2026-11-02', hours: 49 },
+  ])('resolves $label boundaries independently in New York', ({ startDate, endDate, hours }) => {
+    const result = getCalendarDateRangePeriod(startDate, endDate, 'America/New_York')
+    expect(result.valid).toBe(true)
+    if (result.valid === false) throw new Error('Expected a valid DST date range.')
+    expect((Date.parse(result.period.endUtc) - Date.parse(result.period.startUtc)) / 3600000).toBe(hours)
+  })
+
+  it('keeps Apia December 29 valid when the next calendar date was skipped', () => {
+    expect(getCalendarDateRangePeriod('2011-12-29', '2011-12-29', 'Pacific/Apia')).toEqual({
+      valid: true,
+      period: {
+        kind: 'custom', timeZone: 'Pacific/Apia', startDate: '2011-12-29', endDate: '2011-12-29',
+        startUtc: '2011-12-29T10:00:00.000Z', endUtc: '2011-12-30T10:00:00.000Z',
+      },
+    })
+  })
+
+  it('rejects Apia December 30 as an explicitly selected skipped date', () => {
+    const result = getCalendarDateRangePeriod('2011-12-30', '2011-12-30', 'Pacific/Apia')
+    expectIssueFields(result, ['startDate'])
+    expectIssueFields(getCalendarDateRangePeriod('2011-12-29', '2011-12-30', 'Pacific/Apia'), ['endDate'])
+  })
+
+  it('rejects reversed dates and malformed or impossible dates', () => {
+    expectIssueFields(getCalendarDateRangePeriod('2026-11-14', '2026-11-13', 'UTC'), ['startDate'])
+    expectIssueFields(getCalendarDateRangePeriod('', '2026-11-13', 'UTC'), ['startDate'])
+    expectIssueFields(getCalendarDateRangePeriod('2026-02-30', '2026-03-01', 'UTC'), ['startDate'])
+    expectIssueFields(getCalendarDateRangePeriod('2024-02-29', '', 'UTC'), ['endDate'])
+  })
+
+  it('rejects unsupported timezones without falling back to the host timezone', () => {
+    expectIssueFields(getCalendarDateRangePeriod('2026-11-13', '2026-11-14', 'Mars/Olympus'), ['timeZone'])
   })
 })
 

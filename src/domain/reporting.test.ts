@@ -1,10 +1,11 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
+  getCalendarDateRangePeriod,
   getCalendarDayPeriod,
   getCalendarMonthPeriod,
   getCalendarWeekPeriod,
 } from './periods'
-import type { PeriodResult, ReportingPeriod } from './periods'
+import type { CustomDateRangePeriod, PeriodResult, ReportingPeriod } from './periods'
 import {
   calculateDailySummary,
   calculatePeriodTotals,
@@ -45,6 +46,12 @@ function periodFrom(result: PeriodResult): ReportingPeriod {
 
 function dhakaDay() {
   return periodFrom(getCalendarDayPeriod('2026-11-07T12:00:00Z'))
+}
+
+function dhakaCustomRange(startDate = '2026-11-06', endDate = '2026-11-07'): CustomDateRangePeriod {
+  const period = periodFrom(getCalendarDateRangePeriod(startDate, endDate, 'Asia/Dhaka'))
+  if (period.kind !== 'custom') throw new Error('Expected a custom date-range period.')
+  return period
 }
 
 function selectionFrom(result: SelectionResult) {
@@ -100,6 +107,21 @@ describe('filterEntriesForPeriod', () => {
     const result = selectionFrom(filterEntriesForPeriod(entries, period))
     expect(result.entries.map(entry => entry.id)).toEqual(['at-start', 'before-end'])
     expect(result.originalIndices).toEqual([1, 2])
+  })
+
+  it('includes both selected civil dates with a start-inclusive, end-exclusive custom period', () => {
+    const period = dhakaCustomRange()
+    const selection = selectionFrom(filterEntriesForPeriod([
+      makeEntry({ id: 'at-start', consumedAt: period.startUtc }),
+      makeEntry({ id: 'last-included', consumedAt: '2026-11-07T17:59:59.999Z' }),
+      makeEntry({ id: 'at-exclusive-end', consumedAt: period.endUtc }),
+    ], period))
+    expect(period).toMatchObject({
+      kind: 'custom', startDate: '2026-11-06', endDate: '2026-11-07',
+      startUtc: '2026-11-05T18:00:00.000Z', endUtc: '2026-11-07T18:00:00.000Z',
+    })
+    expect(selection.entries.map(entry => entry.id)).toEqual(['at-start', 'last-included'])
+    expect(selection.originalIndices).toEqual([0, 1])
   })
 
   it('assigns drinks on opposite sides of Dhaka midnight to separate calendar days', () => {
@@ -208,6 +230,17 @@ describe('filterEntriesForPeriod', () => {
   ])('rejects a forged period with $label', ({ change, field }) => {
     expectIssues(filterUnknown([], { ...dhakaDay(), ...change }), 'period', [field])
   })
+
+  it('rejects forged custom boundaries and requires the selected civil dates', () => {
+    const range = dhakaCustomRange()
+    expectIssues(filterUnknown([], { ...range, startUtc: '2026-11-05T19:00:00Z' }), 'period', ['startUtc'])
+    expectIssues(filterUnknown([], { ...range, endUtc: '2026-11-07T19:00:00Z' }), 'period', ['endUtc'])
+    expectIssues(filterUnknown([], { ...range, endDate: '2026-11-08' }), 'period', ['endUtc'])
+    const { startDate: _startDate, ...withoutStartDate } = range
+    expectIssues(filterUnknown([], withoutStartDate), 'period', ['startDate'])
+    expectIssues(filterUnknown([], { ...range, startDate: '2026-11-08', endDate: '2026-11-06' }),
+      'period', ['startDate'])
+  })
 })
 
 describe('calculatePeriodTotals', () => {
@@ -227,6 +260,24 @@ describe('calculatePeriodTotals', () => {
     expect(report.totals.volumeMl).toBe(660)
     expect(report.totals.sugarGrams).toBeCloseTo(69.3, 10)
     expect(report.totals.kcal).toBeCloseTo(277.2, 10)
+  })
+
+  it('calculates custom totals while keeping original currencies and zero/unknown prices distinct', () => {
+    const period = dhakaCustomRange()
+    const report = reportFrom(calculatePeriodTotals([
+      makeEntry({ id: 'zero-jpy', consumedAt: period.startUtc, currency: 'JPY', totalPriceMinor: 0 }),
+      makeEntry({ id: 'known-usd', consumedAt: '2026-11-06T12:00:00Z', currency: 'USD', totalPriceMinor: 125 }),
+      makeEntry({ id: 'unknown-usd', consumedAt: '2026-11-07T12:00:00Z', currency: 'USD', totalPriceMinor: null }),
+      makeEntry({ id: 'out-at-end', consumedAt: period.endUtc, currency: 'BDT', totalPriceMinor: 999 }),
+    ], period))
+    expect(report.period).toEqual(period)
+    expect(report.totals.entryCount).toBe(3)
+    expect(report.totals.drinkCount).toBe(3)
+    expect(report.totals.unknownPriceEntryCount).toBe(1)
+    expect(report.totals.spendingByCurrency).toEqual([
+      { currency: 'JPY', knownAmountMinor: 0, unknownPriceEntryCount: 0 },
+      { currency: 'USD', knownAmountMinor: 125, unknownPriceEntryCount: 1 },
+    ])
   })
 
   it('preserves separate currency subtotals and unknown-price entry counts', () => {
