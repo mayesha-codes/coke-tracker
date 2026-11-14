@@ -1,22 +1,50 @@
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import type { SessionEntryRecord } from '../../app/session/sessionState'
+import { calculateDailySummary, calculatePeriodTotals, filterEntriesForPeriod } from '../../domain/reporting'
+import type { ConsumptionTotals } from '../../domain/totals'
+import type { DailyVolumeGoal } from '../../domain/goals'
+import { getCalendarPeriodForDate } from '../../domain/periods'
+import type { ReportingPeriodKind } from '../../domain/periods'
 import { createNutritionReference } from '../../domain/nutrition'
 import { formatMoney } from '../../domain/money'
-import { calculateConsumptionTotals, calculateEntryTotals } from '../../domain/totals'
+import { calculateEntryTotals } from '../../domain/totals'
 import { normalizeUtcTimestamp } from '../../domain/validation'
 import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 import './HistoryPage.css'
 
 interface HistoryPageProps {
-  /** The frozen session records are the sole source for this read-only view. */
   entries: readonly SessionEntryRecord[]
   timeZone: string
+  dailyLimitMl: number | null
+  headingId?: string
 }
 
 const numberFormat = new Intl.NumberFormat(ENGLISH_DISPLAY_LOCALE, { maximumFractionDigits: 2 })
 
 function formatNumber(value: number): string {
   return numberFormat.format(value)
+}
+
+function currentCivilDate(timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat(ENGLISH_DISPLAY_LOCALE, {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date())
+    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? ''
+    return `${value('year').padStart(4, '0')}-${value('month')}-${value('day')}`
+  } catch {
+    return ''
+  }
+}
+
+function formatPeriodDate(timestamp: string, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat(ENGLISH_DISPLAY_LOCALE, {
+      timeZone, year: 'numeric', month: 'long', day: 'numeric',
+    }).format(new Date(timestamp))
+  } catch {
+    return timestamp
+  }
 }
 
 function formatConsumptionTime(timestamp: string, timeZone: string) {
@@ -74,9 +102,7 @@ function EntryCard({ record, timeZone }: { record: SessionEntryRecord; timeZone:
             {consumed === null
               ? <time dateTime={entry.consumedAt}>{entry.consumedAt} (UTC)</time>
               : <time dateTime={consumed.instant}>{consumed.label}</time>}
-            <span className="history-entry__offset">
-              UTC offset: {consumed?.offset ?? 'UTC'}
-            </span>
+            <span className="history-entry__offset">UTC offset: {consumed?.offset ?? 'UTC'}</span>
           </p>
         </header>
 
@@ -109,26 +135,16 @@ function EntryCard({ record, timeZone }: { record: SessionEntryRecord; timeZone:
   )
 }
 
-function HistorySummary({ entries }: { entries: readonly SessionEntryRecord[] }) {
+function HistorySummary({
+  totals, goal, kind,
+}: { totals: ConsumptionTotals; goal: DailyVolumeGoal | null; kind: ReportingPeriodKind }) {
   const summaryId = useId()
-  const result = calculateConsumptionTotals(entries.map(record => record.entry))
-
-  if (result.valid === false) {
-    return (
-      <section className="history-summary" aria-labelledby={summaryId}>
-        <h2 id={summaryId}>Session summary</h2>
-        <p role="alert">Summary unavailable because one or more saved entries could not be validated.</p>
-      </section>
-    )
-  }
-
-  const { totals } = result
   return (
     <section className="history-summary" aria-labelledby={summaryId}>
       <div className="history-summary__heading">
         <div>
-          <p className="history-eyebrow">So far this session</p>
-          <h2 id={summaryId}>Session summary</h2>
+          <p className="history-eyebrow">Selected calendar period</p>
+          <h2 id={summaryId}>Period summary</h2>
         </div>
         <p className="history-summary__count">
           {totals.entryCount} {totals.entryCount === 1 ? 'entry' : 'entries'} · {totals.drinkCount} {totals.drinkCount === 1 ? 'drink' : 'drinks'}
@@ -145,7 +161,7 @@ function HistorySummary({ entries }: { entries: readonly SessionEntryRecord[] })
       <section className="history-summary__spending" aria-labelledby={`${summaryId}-spending`}>
         <h3 id={`${summaryId}-spending`}>Spending by currency</h3>
         {totals.spendingByCurrency.length === 0 ? (
-          <p>No prices recorded yet.</p>
+          <p>No prices recorded in this period.</p>
         ) : (
           <ul>
             {totals.spendingByCurrency.map(row => {
@@ -155,34 +171,67 @@ function HistorySummary({ entries }: { entries: readonly SessionEntryRecord[] })
               return (
                 <li key={row.currency}>
                   <span>{row.currency}</span>
-                  {' '}
-                  <span>Known subtotal: {knownAmount}{incomplete ? ' · incomplete' : ''}</span>
-                  {incomplete && <>
-                    {' '}
-                    <span>{row.unknownPriceEntryCount} {row.unknownPriceEntryCount === 1 ? 'entry has' : 'entries have'} unknown price</span>
-                  </>}
+                  <span>Known subtotal: {knownAmount}{incomplete ? ' · incomplete' : ' · complete'}</span>
+                  {incomplete && <span>{row.unknownPriceEntryCount} {row.unknownPriceEntryCount === 1 ? 'entry has' : 'entries have'} unknown price</span>}
                 </li>
               )
             })}
           </ul>
         )}
       </section>
+      {kind === 'day' && goal !== null && (
+        <section className="history-goal" aria-label="Daily volume goal status">
+          <h3>Daily volume goal</h3>
+          {goal.state === 'disabled' ? <p>Goal disabled.</p> : (
+            <p>
+              {goal.state === 'within' ? `${formatNumber(goal.remainingMl)} ml remaining` :
+                goal.state === 'reached' ? 'Daily limit reached.' : `${formatNumber(goal.excessMl)} ml above your daily limit.`}
+            </p>
+          )}
+        </section>
+      )}
       <p className="history-summary__calorie-note">Calories are estimated from each entry’s saved Coke nutrition values.</p>
     </section>
   )
 }
 
-function HistoryPage({ entries, timeZone }: HistoryPageProps) {
+function HistoryPage({ entries, timeZone, dailyLimitMl = null, headingId = 'view-heading' }: HistoryPageProps) {
   const listId = useId()
-  // Entries are appended only after an accepted save. Reverse a copy to preserve that array.
-  const newestFirst = [...entries].reverse()
+  const [kind, setKind] = useState<ReportingPeriodKind>('day')
+  const [selectedDate, setSelectedDate] = useState(() => currentCivilDate(timeZone))
+  const periodResult = getCalendarPeriodForDate(selectedDate, kind, timeZone)
+  const drinkEntries = entries.map(record => record.entry)
+
+  const dailyReport = periodResult.valid && kind === 'day'
+    ? calculateDailySummary(drinkEntries, periodResult.period.startUtc, dailyLimitMl, timeZone)
+    : null
+  const rangeReport = periodResult.valid && kind !== 'day'
+    ? calculatePeriodTotals(drinkEntries, periodResult.period)
+    : null
+  const report = dailyReport ?? rangeReport
+  const selection = periodResult.valid
+    ? filterEntriesForPeriod(drinkEntries, periodResult.period)
+    : null
+
+  const totals = report?.valid ? report.totals : null
+  const goal = dailyReport?.valid ? dailyReport.goal : null
+  const selectedRecords = selection?.valid
+    ? selection.originalIndices.map(index => entries[index]).reverse()
+    : []
+  const errorMessage = !periodResult.valid
+    ? periodResult.issues.map(issue => issue.message).join(' ')
+    : report?.valid === false
+      ? report.issues.map(issue => issue.message).join(' ')
+      : selection?.valid === false
+        ? selection.issues.map(issue => issue.message).join(' ')
+        : null
 
   return (
     <div className="history-page">
       <header className="history-page__heading">
         <div>
           <p className="history-eyebrow">Your habits, with a little perspective</p>
-          <h1 id="view-heading">History<span aria-hidden="true">.</span></h1>
+          <h1 id={headingId}>History<span aria-hidden="true">.</span></h1>
           <p>Review drinks saved during this session, newest saved first.</p>
         </div>
         <span className="history-page__timezone">Times shown in {timeZone}</span>
@@ -192,22 +241,62 @@ function HistoryPage({ entries, timeZone }: HistoryPageProps) {
         These entries are temporary. Refreshing or closing the application clears this session’s history and preferences.
       </p>
 
-      <HistorySummary entries={entries} />
+      <section className="history-period-controls" aria-labelledby="history-period-heading">
+        <div>
+          <p className="history-eyebrow">Explore your history</p>
+          <h2 id="history-period-heading">Choose a period</h2>
+        </div>
+        <fieldset className="history-period-controls__modes">
+          <legend>Calendar period</legend>
+          {(['day', 'week', 'month'] as const).map(value => (
+            <label key={value}>
+              <input type="radio" name="history-period-kind" value={value}
+                checked={kind === value} onChange={() => setKind(value)} />
+              <span>{value === 'day' ? 'Daily' : value === 'week' ? 'Weekly' : 'Monthly'}</span>
+            </label>
+          ))}
+        </fieldset>
+        <label className="history-period-controls__date">
+          Reference date
+          <input type="date" value={selectedDate} onChange={event => setSelectedDate(event.currentTarget.value)} />
+        </label>
+      </section>
+
+      {periodResult.valid && (
+        <p className="history-period-range">
+          <span>Period in {timeZone}: </span>
+          <time dateTime={periodResult.period.startUtc}>{formatPeriodDate(periodResult.period.startUtc, timeZone)}</time>
+          {' – '}
+          <time dateTime={periodResult.period.endUtc}>{formatPeriodDate(periodResult.period.endUtc, timeZone)} (exclusive)</time>
+        </p>
+      )}
+
+      {errorMessage !== null ? (
+        <p className="history-period-error" role="alert">History for this period is unavailable. {errorMessage}</p>
+      ) : totals !== null && (
+        <HistorySummary totals={totals} goal={goal} kind={kind} />
+      )}
 
       <section className="history-list" aria-labelledby={listId}>
         <div className="history-list__heading">
           <div>
-            <p className="history-eyebrow">Saved in this session</p>
-            <h2 id={listId}>All entries</h2>
+            <p className="history-eyebrow">Saved in this period</p>
+            <h2 id={listId}>Period entries</h2>
           </div>
-          <span>{entries.length} {entries.length === 1 ? 'entry' : 'entries'}</span>
+          <span>{errorMessage === null ? `${selectedRecords.length} ${selectedRecords.length === 1 ? 'entry' : 'entries'}` : 'Unavailable'}</span>
         </div>
 
-        {newestFirst.length === 0 ? (
-          <p className="history-list__empty">No drinks saved this session yet. Log a drink to start your history.</p>
+        {errorMessage !== null ? (
+          <p className="history-list__empty">Entries are hidden until the selected period can be validated.</p>
+        ) : selectedRecords.length === 0 ? (
+          <p className="history-list__empty">
+            {entries.length === 0
+              ? 'No drinks saved this session yet. Log a drink to start your history.'
+              : 'No drinks were saved in this period. The session may contain drinks from other dates; try another date or period.'}
+          </p>
         ) : (
           <ol className="history-entry-list">
-            {newestFirst.map(record => <EntryCard key={record.entry.id} record={record} timeZone={timeZone} />)}
+            {selectedRecords.map(record => <EntryCard key={record.entry.id} record={record} timeZone={timeZone} />)}
           </ol>
         )}
       </section>

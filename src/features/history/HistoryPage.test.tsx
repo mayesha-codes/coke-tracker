@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { NutritionProvenance, SessionEntryRecord } from '../../app/session/sessionState'
 import { createDrinkEntry } from '../../domain/entries'
@@ -8,7 +8,15 @@ import { createNutritionReference } from '../../domain/nutrition'
 import type { CurrencyCode } from '../../domain/types'
 import HistoryPage from './HistoryPage'
 
-afterEach(cleanup)
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-11-08T09:30:00.000Z'))
+})
+
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 // Fictional values and URLs are test fixtures only; production data is never inferred from them.
 function makeRecord(id: string, options: {
@@ -57,16 +65,28 @@ function makeRecord(id: string, options: {
   })
 }
 
-function renderHistory(entries: readonly SessionEntryRecord[], timeZone = 'Asia/Tokyo') {
-  return render(<HistoryPage entries={entries} timeZone={timeZone} />)
+function renderHistory(entries: readonly SessionEntryRecord[], timeZone = 'Asia/Tokyo', dailyLimitMl: number | null = null) {
+  return render(<HistoryPage entries={entries} timeZone={timeZone} dailyLimitMl={dailyLimitMl} />)
 }
 
 function historyList() {
-  return screen.getByRole('region', { name: 'All entries' })
+  return screen.getByRole('region', { name: 'Period entries' })
 }
 
 function summary() {
-  return screen.getByRole('region', { name: 'Session summary' })
+  return screen.getByRole('region', { name: 'Period summary' })
+}
+
+function dateInput() {
+  return screen.getByLabelText('Reference date') as HTMLInputElement
+}
+
+function selectDate(value: string) {
+  fireEvent.change(dateInput(), { target: { value } })
+}
+
+function selectPeriod(label: 'Daily' | 'Weekly' | 'Monthly') {
+  fireEvent.click(screen.getByRole('radio', { name: label }))
 }
 
 function metric(container: HTMLElement, label: string) {
@@ -79,17 +99,22 @@ function normalizedText(element: HTMLElement) {
 }
 
 describe('read-only session history', () => {
-  it('shows a clear empty state, zeroed session summary, and temporary-data notice', () => {
+  it('shows the timezone-local initial date, an empty period state, and temporary-data notice', () => {
     renderHistory(Object.freeze([]))
 
     expect(screen.getByRole('heading', { name: 'History', level: 1 })).toBeDefined()
     expect(within(historyList()).getByText('No drinks saved this session yet. Log a drink to start your history.')).toBeDefined()
     expect(within(historyList()).queryAllByRole('listitem')).toHaveLength(0)
+    expect(dateInput().value).toBe('2026-11-08')
+    expect(screen.getByRole('radio', { name: 'Daily' })).toHaveProperty('checked', true)
+    expect(screen.getByText('November 8, 2026')).toBeDefined()
+    expect(screen.getByText(/November 9, 2026 \(exclusive\)/)).toBeDefined()
     expect(metric(summary(), 'Total volume')).toBe('0 ml')
     expect(metric(summary(), 'Estimated sugar')).toBe('0 g')
     expect(metric(summary(), 'Coke-only calories')).toBe('0 kcal')
     expect(metric(summary(), 'Entries with unknown prices')).toBe('0')
-    expect(within(summary()).getByText('No prices recorded yet.')).toBeDefined()
+    expect(within(summary()).getByText('No prices recorded in this period.')).toBeDefined()
+    expect(within(summary()).getByRole('region', { name: 'Daily volume goal status' }).textContent).toContain('Goal disabled.')
     expect(screen.getByText(/Refreshing or closing the application clears this session’s history/)).toBeDefined()
   })
 
@@ -114,6 +139,10 @@ describe('read-only session history', () => {
     const disclosure = within(rows[0]).getByText('Nutrition source details', { selector: 'summary' })
     expect(disclosure.closest('details')?.open).toBe(false)
     await user.tab()
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Daily' }))
+    await user.keyboard('{ArrowRight}')
+    await user.tab()
+    await user.tab()
     expect(document.activeElement).toBe(disclosure)
     // jsdom does not implement the browser's native Enter action on <summary>.
     await user.click(disclosure)
@@ -123,11 +152,11 @@ describe('read-only session history', () => {
       .toBe('https://example.invalid/label/one')
   })
 
-  it('displays every record newest saved first, even when the newest save is backdated', () => {
+  it('filters to the selected day and preserves save order instead of sorting backdated drinks', () => {
     const entries = Object.freeze([
-      makeRecord('first', { timestamp: '2026-12-01T12:00:00Z' }),
-      makeRecord('second', { timestamp: '2026-12-02T12:00:00Z' }),
-      makeRecord('backdated', { timestamp: '2020-01-01T00:00:00Z' }),
+      makeRecord('first', { timestamp: '2026-11-08T13:00:00Z' }),
+      makeRecord('second', { timestamp: '2026-11-08T14:00:00Z' }),
+      makeRecord('backdated', { timestamp: '2026-11-08T02:00:00Z' }),
       makeRecord('fourth'),
       makeRecord('fifth'),
       makeRecord('sixth'),
@@ -165,10 +194,10 @@ describe('read-only session history', () => {
     expect(metric(entryRows[0], 'Total price')).toBe('Unknown (USD)')
     const rows = within(summary()).getByRole('list').querySelectorAll('li')
     expect([...rows].map(row => normalizedText(row))).toEqual([
-      'BDT Known subtotal: BDT 120.50',
-      'EUR Known subtotal: EUR 3.99',
-      'JPY Known subtotal: JPY 0',
-      'USD Known subtotal: USD 1.25 · incomplete 1 entry has unknown price',
+      'BDTKnown subtotal: BDT 120.50 · complete',
+      'EURKnown subtotal: EUR 3.99 · complete',
+      'JPYKnown subtotal: JPY 0 · complete',
+      'USDKnown subtotal: USD 1.25 · incomplete1 entry has unknown price',
     ])
     expect(metric(summary(), 'Entries with unknown prices')).toBe('1')
     expect(within(summary()).queryByText(/Total spending:/)).toBeNull()
@@ -181,6 +210,7 @@ describe('read-only session history', () => {
     ])
     const before = structuredClone(entries)
     const view = renderHistory(entries, 'America/New_York')
+    selectDate('2024-11-03')
 
     expect(screen.getByText('Times shown in America/New_York')).toBeDefined()
     const times = within(historyList()).getAllByRole('listitem').map(row => row.querySelector('time'))
@@ -193,7 +223,8 @@ describe('read-only session history', () => {
       '2024-11-03T06:30:00.000Z', '2024-11-03T05:30:00.000Z',
     ])
 
-    view.rerender(<HistoryPage entries={entries} timeZone="Asia/Dhaka" />)
+    view.rerender(<HistoryPage entries={entries} timeZone="Asia/Dhaka" dailyLimitMl={null} />)
+    expect(dateInput().value).toBe('2024-11-03')
     expect(screen.getByText('Times shown in Asia/Dhaka')).toBeDefined()
     expect(within(historyList()).getAllByRole('listitem').map(row => row.querySelector('time')?.dateTime)).toEqual(
       entries.slice().reverse().map(record => record.entry.consumedAt),
@@ -218,5 +249,94 @@ describe('read-only session history', () => {
     expect(entries).toEqual(before)
     expect(Object.isFrozen(old.entry.nutrition)).toBe(true)
     expect(Object.isFrozen(old.nutritionProvenance.reference.source)).toBe(true)
+  })
+
+  it('filters the list and summary together using inclusive start and exclusive end boundaries', () => {
+    const entries = Object.freeze([
+      makeRecord('at-end', { timestamp: '2026-11-08T15:00:00Z' }),
+      makeRecord('inside', { timestamp: '2026-11-08T14:59:59.999Z' }),
+      makeRecord('at-start', { timestamp: '2026-11-07T15:00:00Z' }),
+    ])
+    renderHistory(entries)
+    expect(within(historyList()).getAllByRole('listitem').map(item => item.textContent)).toHaveLength(2)
+    expect(within(historyList()).getByText('Illustrative product inside')).toBeDefined()
+    expect(within(historyList()).getByText('Illustrative product at-start')).toBeDefined()
+    expect(within(historyList()).queryByText('Illustrative product at-end')).toBeNull()
+    expect(within(summary()).getByText('2 entries · 4 drinks')).toBeDefined()
+  })
+
+  it('updates period mode and reference date while filtering results and summary together', () => {
+    const entries = Object.freeze([
+      makeRecord('sunday', { timestamp: '2026-11-08T14:59:59Z' }),
+      makeRecord('monday', { timestamp: '2026-11-08T15:00:00Z' }),
+      makeRecord('december', { timestamp: '2026-11-30T15:00:00Z' }),
+    ])
+    renderHistory(entries)
+    expect(within(historyList()).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(summary()).getByText('1 entry · 2 drinks')).toBeDefined()
+
+    selectPeriod('Weekly')
+    expect(within(historyList()).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(historyList()).getByText('Illustrative product sunday')).toBeDefined()
+    expect(within(summary()).getByText('1 entry · 2 drinks')).toBeDefined()
+    expect(screen.queryByRole('region', { name: 'Daily volume goal status' })).toBeNull()
+
+    selectPeriod('Monthly')
+    expect(within(historyList()).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(summary()).getByText('2 entries · 4 drinks')).toBeDefined()
+
+    selectDate('2026-12-01')
+    expect(within(historyList()).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(historyList()).getByText('Illustrative product december')).toBeDefined()
+    expect(within(summary()).getByText('1 entry · 2 drinks')).toBeDefined()
+  })
+
+  it('keeps the selected civil date when the reporting timezone changes', () => {
+    const record = makeRecord('zone-edge', { timestamp: '2026-11-08T01:00:00Z' })
+    const entries = Object.freeze([record])
+    const before = structuredClone(entries)
+    const view = renderHistory(entries, 'America/Los_Angeles')
+    selectDate('2026-11-07')
+    expect(within(historyList()).getAllByRole('listitem')).toHaveLength(1)
+    const oldBoundary = screen.getByText(/Period in America\/Los_Angeles:/).textContent
+
+    view.rerender(<HistoryPage entries={entries} timeZone="Asia/Tokyo" dailyLimitMl={null} />)
+    expect(dateInput().value).toBe('2026-11-07')
+    expect(screen.getByText(/Period in Asia\/Tokyo:/)).toBeDefined()
+    expect(screen.getByText(/Period in Asia\/Tokyo:/).textContent).not.toBe(oldBoundary)
+    expect(within(historyList()).queryAllByRole('listitem')).toHaveLength(0)
+    expect(within(historyList()).getByText(/session may contain drinks from other dates/)).toBeDefined()
+    expect(entries).toEqual(before)
+    expect(record.entry.consumedAt).toBe('2026-11-08T01:00:00.000Z')
+    expect(Object.isFrozen(record.entry.nutrition)).toBe(true)
+  })
+
+  it.each([
+    { limit: null, stateText: 'Goal disabled.' },
+    { limit: 1000, stateText: '340 ml remaining' },
+    { limit: 660, stateText: 'Daily limit reached.' },
+    { limit: 500, stateText: '160 ml above your daily limit.' },
+  ])('shows the daily goal result for limit $limit', ({ limit, stateText }) => {
+    renderHistory(Object.freeze([makeRecord('goal')]), 'Asia/Tokyo', limit)
+    expect(within(screen.getByRole('region', { name: 'Daily volume goal status' })).getByText(stateText)).toBeDefined()
+  })
+
+  it('does not display a misleading summary when a civil date cannot be built', () => {
+    const entries = Object.freeze([makeRecord('existing')])
+    renderHistory(entries, 'Pacific/Apia')
+    selectDate('2011-12-30')
+    expect(screen.getByRole('alert').textContent).toContain('does not exist')
+    expect(screen.queryByRole('region', { name: 'Period summary' })).toBeNull()
+    expect(within(historyList()).getByText(/hidden until the selected period can be validated/)).toBeDefined()
+  })
+
+  it('uses an accessible native date input and keyboard-operable period radios', async () => {
+    const user = userEvent.setup()
+    renderHistory(Object.freeze([]))
+    expect(dateInput().type).toBe('date')
+    await user.tab()
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Daily' }))
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('radio', { name: 'Weekly' })).toHaveProperty('checked', true)
   })
 })

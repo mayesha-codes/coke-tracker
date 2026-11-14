@@ -12,6 +12,7 @@ function App() {
   const { state, addEntry, lastEntryResult } = useSession()
   const [activeView, setActiveView] = useState<AppView>('home')
   const [hasVisitedLog, setHasVisitedLog] = useState(false)
+  const [hasVisitedHistory, setHasVisitedHistory] = useState(false)
   const { currency, reportingTimeZone } = state.preferences
   const draftKey = JSON.stringify([currency, reportingTimeZone])
   const [draftPreferences, setDraftPreferences] = useState({ key: draftKey, wasReset: false })
@@ -23,6 +24,7 @@ function App() {
 
   function navigate(view: AppView) {
     if (view === 'log') setHasVisitedLog(true)
+    if (view === 'history') setHasVisitedHistory(true)
     setActiveView(view)
   }
 
@@ -49,9 +51,17 @@ function App() {
           />
         )}
       </div>
-      {activeView === 'settings' ? <PreferencesPage hasLogDraft={hasVisitedLog} /> : activeView === 'history' ? (
-        <HistoryPage entries={state.entries} timeZone={reportingTimeZone} />
-      ) : activeView === 'home' ? (
+      <div hidden={activeView !== 'history'} inert={activeView !== 'history'}>
+        {hasVisitedHistory && (
+          <HistoryPage
+            entries={state.entries}
+            timeZone={reportingTimeZone}
+            dailyLimitMl={state.preferences.dailyLimitMl}
+            headingId={activeView === 'history' ? 'view-heading' : 'history-view-heading'}
+          />
+        )}
+      </div>
+      {activeView === 'settings' ? <PreferencesPage hasLogDraft={hasVisitedLog} /> : activeView === 'home' ? (
         <DashboardPage />
       ) : null}
     </AppShell>

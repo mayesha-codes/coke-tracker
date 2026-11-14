@@ -882,7 +882,7 @@ describe('recent session entries connected to shared history', () => {
 })
 
 describe('History navigation uses the shared session state', () => {
-  it('retains saved entries after navigation and changes only displayed times when timezone preferences change', async () => {
+  it('retains the selected civil date and changes display timezone without rewriting saved entries', async () => {
     const first = withIllustrativeSavedEntry(personalState(), {
       consumedAt: '2026-11-07T09:00:00Z', currency: 'JPY', totalPriceMinor: 0,
     })
@@ -893,28 +893,33 @@ describe('History navigation uses the shared session state', () => {
     const { user } = renderApp({ initialState, controls: true })
 
     await navigate(user, 'History')
-    const list = screen.getByRole('region', { name: 'All entries' })
-    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    const datePicker = screen.getByLabelText('Reference date') as HTMLInputElement
+    expect(datePicker.value).toBe('2026-11-08')
+    fireEvent.change(datePicker, { target: { value: '2026-11-07' } })
+    const list = screen.getByRole('region', { name: 'Period entries' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
     expect(within(list).getAllByRole('listitem').map(item =>
       within(item).getByRole('heading', { level: 2 }).textContent,
     ))
-      .toEqual(['Illustrative personal can', 'Illustrative personal can'])
-    expect(within(list).getAllByText('Unknown (USD)')).toHaveLength(1)
+      .toEqual(['Illustrative personal can'])
+    expect(within(list).queryByText('Unknown (USD)')).toBeNull()
     expect(within(list).getAllByText('JPY 0')).toHaveLength(1)
     const originalUtcTimes = within(list).getAllByRole('listitem').map(item => item.querySelector('time')?.dateTime)
-    expect(originalUtcTimes).toEqual(['2020-01-01T00:00:00.000Z', '2026-11-07T09:00:00.000Z'])
+    expect(originalUtcTimes).toEqual(['2026-11-07T09:00:00.000Z'])
 
     await navigate(user, 'Log')
     await navigate(user, 'Home')
     await navigate(user, 'History')
-    expect(within(screen.getByRole('region', { name: 'All entries' })).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(screen.getByRole('region', { name: 'Period entries' })).getAllByRole('listitem')).toHaveLength(1)
+    expect((screen.getByLabelText('Reference date') as HTMLInputElement).value).toBe('2026-11-07')
 
     await user.click(screen.getByRole('button', { name: 'Use UTC in test' }))
     expect(screen.getByText('Times shown in UTC')).toBeDefined()
-    const afterPreferenceChange = screen.getByRole('region', { name: 'All entries' })
+    expect((screen.getByLabelText('Reference date') as HTMLInputElement).value).toBe('2026-11-07')
+    const afterPreferenceChange = screen.getByRole('region', { name: 'Period entries' })
     expect(within(afterPreferenceChange).getAllByRole('listitem').map(item => item.querySelector('time')?.dateTime))
       .toEqual(originalUtcTimes)
-    expect(within(afterPreferenceChange).getAllByText('Unknown (USD)')).toHaveLength(1)
+    expect(within(afterPreferenceChange).queryByText('Unknown (USD)')).toBeNull()
     expect(within(afterPreferenceChange).getAllByText('JPY 0')).toHaveLength(1)
     expect(initialState.entries).toEqual(originalEntries)
   })
