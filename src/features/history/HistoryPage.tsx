@@ -3,7 +3,7 @@ import type { SessionEntryRecord } from '../../app/session/sessionState'
 import { calculateDailySummary, calculatePeriodTotals, filterEntriesForPeriod } from '../../domain/reporting'
 import type { ConsumptionTotals } from '../../domain/totals'
 import type { DailyVolumeGoal } from '../../domain/goals'
-import { getCalendarPeriodForDate } from '../../domain/periods'
+import { getCalendarDateRangePeriod, getCalendarPeriodForDate } from '../../domain/periods'
 import type { ReportingPeriodKind } from '../../domain/periods'
 import { createNutritionReference } from '../../domain/nutrition'
 import { formatMoney } from '../../domain/money'
@@ -20,6 +20,7 @@ interface HistoryPageProps {
 }
 
 const numberFormat = new Intl.NumberFormat(ENGLISH_DISPLAY_LOCALE, { maximumFractionDigits: 2 })
+type HistoryPeriodMode = ReportingPeriodKind | 'custom'
 
 function formatNumber(value: number): string {
   return numberFormat.format(value)
@@ -137,13 +138,13 @@ function EntryCard({ record, timeZone }: { record: SessionEntryRecord; timeZone:
 
 function HistorySummary({
   totals, goal, kind,
-}: { totals: ConsumptionTotals; goal: DailyVolumeGoal | null; kind: ReportingPeriodKind }) {
+}: { totals: ConsumptionTotals; goal: DailyVolumeGoal | null; kind: HistoryPeriodMode }) {
   const summaryId = useId()
   return (
     <section className="history-summary" aria-labelledby={summaryId}>
       <div className="history-summary__heading">
         <div>
-          <p className="history-eyebrow">Selected calendar period</p>
+          <p className="history-eyebrow">{kind === 'custom' ? 'Selected custom date range' : 'Selected calendar period'}</p>
           <h2 id={summaryId}>Period summary</h2>
         </div>
         <p className="history-summary__count">
@@ -197,9 +198,14 @@ function HistorySummary({
 
 function HistoryPage({ entries, timeZone, dailyLimitMl = null, headingId = 'view-heading' }: HistoryPageProps) {
   const listId = useId()
-  const [kind, setKind] = useState<ReportingPeriodKind>('day')
+  const [kind, setKind] = useState<HistoryPeriodMode>('day')
   const [selectedDate, setSelectedDate] = useState(() => currentCivilDate(timeZone))
-  const periodResult = getCalendarPeriodForDate(selectedDate, kind, timeZone)
+  const [customDates, setCustomDates] = useState<{ start: string; end: string } | null>(null)
+  const customStartDate = customDates?.start ?? selectedDate
+  const customEndDate = customDates?.end ?? selectedDate
+  const periodResult = kind === 'custom'
+    ? getCalendarDateRangePeriod(customStartDate, customEndDate, timeZone)
+    : getCalendarPeriodForDate(selectedDate, kind, timeZone)
   const drinkEntries = entries.map(record => record.entry)
 
   const dailyReport = periodResult.valid && kind === 'day'
@@ -241,39 +247,73 @@ function HistoryPage({ entries, timeZone, dailyLimitMl = null, headingId = 'view
         These entries are temporary. Refreshing or closing the application clears this session’s history and preferences.
       </p>
 
-      <section className="history-period-controls" aria-labelledby="history-period-heading">
+      <section className={`history-period-controls${kind === 'custom' ? ' history-period-controls--custom' : ''}`} aria-labelledby="history-period-heading">
         <div>
           <p className="history-eyebrow">Explore your history</p>
           <h2 id="history-period-heading">Choose a period</h2>
         </div>
         <fieldset className="history-period-controls__modes">
           <legend>Calendar period</legend>
-          {(['day', 'week', 'month'] as const).map(value => (
+          {(['day', 'week', 'month', 'custom'] as const).map(value => (
             <label key={value}>
-              <input type="radio" name="history-period-kind" value={value}
-                checked={kind === value} onChange={() => setKind(value)} />
-              <span>{value === 'day' ? 'Daily' : value === 'week' ? 'Weekly' : 'Monthly'}</span>
+              <input type="radio" name="history-period-kind" value={value} checked={kind === value}
+                onChange={() => {
+                  if (value === 'custom' && customDates === null) {
+                    setCustomDates({ start: selectedDate, end: selectedDate })
+                  }
+                  setKind(value)
+                }} />
+              <span>{value === 'day' ? 'Daily' : value === 'week' ? 'Weekly' : value === 'month' ? 'Monthly' : 'Custom'}</span>
             </label>
           ))}
         </fieldset>
-        <label className="history-period-controls__date">
-          Reference date
-          <input type="date" value={selectedDate} onChange={event => setSelectedDate(event.currentTarget.value)} />
-        </label>
+        {kind === 'custom' ? (
+          <div className="history-period-controls__custom-dates">
+            <label className="history-period-controls__date">
+              Start date
+              <input type="date" value={customStartDate}
+                onChange={event => {
+                  const value = event.currentTarget.value
+                  setCustomDates(previous => ({ start: value, end: previous?.end ?? selectedDate }))
+                }} />
+            </label>
+            <label className="history-period-controls__date">
+              End date
+              <input type="date" value={customEndDate}
+                onChange={event => {
+                  const value = event.currentTarget.value
+                  setCustomDates(previous => ({ start: previous?.start ?? selectedDate, end: value }))
+                }} />
+            </label>
+            <p>Both selected dates are included.</p>
+          </div>
+        ) : (
+          <label className="history-period-controls__date">
+            Reference date
+            <input type="date" value={selectedDate} onChange={event => setSelectedDate(event.currentTarget.value)} />
+          </label>
+        )}
+        {errorMessage !== null && (
+          <p className="history-period-error" role="alert">History for this period is unavailable. {errorMessage}</p>
+        )}
       </section>
 
       {periodResult.valid && (
         <p className="history-period-range">
-          <span>Period in {timeZone}: </span>
-          <time dateTime={periodResult.period.startUtc}>{formatPeriodDate(periodResult.period.startUtc, timeZone)}</time>
-          {' – '}
-          <time dateTime={periodResult.period.endUtc}>{formatPeriodDate(periodResult.period.endUtc, timeZone)} (exclusive)</time>
+          {kind === 'custom' ? (
+            <>From <time dateTime={customStartDate}>{customStartDate}</time> through <time dateTime={customEndDate}>{customEndDate}</time> (inclusive) in {timeZone}.</>
+          ) : (
+            <>
+              <span>Period in {timeZone}: </span>
+              <time dateTime={periodResult.period.startUtc}>{formatPeriodDate(periodResult.period.startUtc, timeZone)}</time>
+              {' – '}
+              <time dateTime={periodResult.period.endUtc}>{formatPeriodDate(periodResult.period.endUtc, timeZone)} (exclusive)</time>
+            </>
+          )}
         </p>
       )}
 
-      {errorMessage !== null ? (
-        <p className="history-period-error" role="alert">History for this period is unavailable. {errorMessage}</p>
-      ) : totals !== null && (
+      {errorMessage === null && totals !== null && (
         <HistorySummary totals={totals} goal={goal} kind={kind} />
       )}
 

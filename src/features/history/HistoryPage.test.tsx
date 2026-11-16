@@ -77,15 +77,23 @@ function summary() {
   return screen.getByRole('region', { name: 'Period summary' })
 }
 
+function periodRangeText() {
+  return document.querySelector('.history-period-range')?.textContent?.replace(/\s+/g, ' ') ?? ''
+}
+
 function dateInput() {
   return screen.getByLabelText('Reference date') as HTMLInputElement
+}
+
+function customDateInput(label: 'Start date' | 'End date') {
+  return screen.getByLabelText(label) as HTMLInputElement
 }
 
 function selectDate(value: string) {
   fireEvent.change(dateInput(), { target: { value } })
 }
 
-function selectPeriod(label: 'Daily' | 'Weekly' | 'Monthly') {
+function selectPeriod(label: 'Daily' | 'Weekly' | 'Monthly' | 'Custom') {
   fireEvent.click(screen.getByRole('radio', { name: label }))
 }
 
@@ -291,6 +299,101 @@ describe('read-only session history', () => {
     expect(within(summary()).getByText('1 entry · 2 drinks')).toBeDefined()
   })
 
+  it('offers Custom as the fourth mode and initializes an inclusive range from the reference date', () => {
+    renderHistory(Object.freeze([]))
+    const radios = screen.getAllByRole('radio')
+    expect(radios.map(radio => (radio as HTMLInputElement).value)).toEqual(['day', 'week', 'month', 'custom'])
+    selectDate('2026-11-10')
+    selectPeriod('Custom')
+    expect(customDateInput('Start date').value).toBe('2026-11-10')
+    expect(customDateInput('End date').value).toBe('2026-11-10')
+    expect(screen.getByText('Both selected dates are included.')).toBeDefined()
+    expect(periodRangeText()).toContain('From 2026-11-10 through 2026-11-10 (inclusive) in Asia/Tokyo.')
+    expect(screen.queryByRole('region', { name: 'Daily volume goal status' })).toBeNull()
+  })
+
+  it('updates start and end independently and shows both selected dates inclusively', () => {
+    const entries = Object.freeze([
+      makeRecord('at-start', { timestamp: '2026-11-06T15:00:00Z' }),
+      makeRecord('inside-end-date', { timestamp: '2026-11-08T14:59:59.999Z' }),
+      makeRecord('at-exclusive-end', { timestamp: '2026-11-08T15:00:00Z' }),
+    ])
+    renderHistory(entries)
+    selectPeriod('Custom')
+    fireEvent.change(customDateInput('Start date'), { target: { value: '2026-11-07' } })
+    fireEvent.change(customDateInput('End date'), { target: { value: '2026-11-08' } })
+
+    expect(customDateInput('Start date').value).toBe('2026-11-07')
+    expect(customDateInput('End date').value).toBe('2026-11-08')
+    expect(periodRangeText()).toContain('From 2026-11-07 through 2026-11-08 (inclusive)')
+    expect(within(historyList()).getAllByRole('listitem').map(item =>
+      within(item).getByRole('heading', { level: 2 }).textContent,
+    )).toEqual(['Illustrative product inside-end-date', 'Illustrative product at-start'])
+    expect(within(summary()).getByText('2 entries · 4 drinks')).toBeDefined()
+    expect(metric(summary(), 'Total volume')).toBe('1,320 ml')
+  })
+
+  it('shows range validation errors and hides all period results for reversed or missing dates', () => {
+    renderHistory(Object.freeze([makeRecord('outside')]))
+    selectPeriod('Custom')
+    fireEvent.change(customDateInput('Start date'), { target: { value: '2026-11-10' } })
+    fireEvent.change(customDateInput('End date'), { target: { value: '2026-11-09' } })
+    expect(screen.getByRole('alert').textContent).toContain('start date must be on or before the end date')
+    expect(screen.queryByRole('region', { name: 'Period summary' })).toBeNull()
+    expect(within(historyList()).getByText(/hidden until the selected period can be validated/)).toBeDefined()
+
+    fireEvent.change(customDateInput('Start date'), { target: { value: '' } })
+    expect(screen.getByRole('alert').textContent).toContain('start date in YYYY-MM-DD format')
+    expect(screen.queryByRole('region', { name: 'Period summary' })).toBeNull()
+  })
+
+  it('rejects a custom range containing a nonexistent local date in Apia', () => {
+    const entries = Object.freeze([makeRecord('exists')])
+    const view = renderHistory(entries, 'Pacific/Apia')
+    selectPeriod('Custom')
+    fireEvent.change(customDateInput('Start date'), { target: { value: '2011-12-29' } })
+    fireEvent.change(customDateInput('End date'), { target: { value: '2011-12-30' } })
+    expect(screen.getByRole('alert').textContent).toContain('end date does not exist')
+    expect(screen.queryByRole('region', { name: 'Period summary' })).toBeNull()
+    expect(within(historyList()).queryAllByRole('listitem')).toHaveLength(0)
+
+    view.rerender(<HistoryPage entries={entries} timeZone="Pacific/Apia" dailyLimitMl={null} />)
+    expect(customDateInput('Start date').value).toBe('2011-12-29')
+  })
+
+  it('shows zero totals and an outside-period empty state for a valid empty custom range', () => {
+    renderHistory(Object.freeze([makeRecord('other-date', { timestamp: '2026-11-10T12:00:00Z' })]))
+    selectPeriod('Custom')
+    fireEvent.change(customDateInput('Start date'), { target: { value: '2026-11-01' } })
+    fireEvent.change(customDateInput('End date'), { target: { value: '2026-11-02' } })
+    expect(within(summary()).getByText('0 entries · 0 drinks')).toBeDefined()
+    expect(metric(summary(), 'Total volume')).toBe('0 ml')
+    expect(within(historyList()).queryAllByRole('listitem')).toHaveLength(0)
+    expect(within(historyList()).getByText(/session may contain drinks from other dates/)).toBeDefined()
+  })
+
+  it('preserves custom dates while switching modes and recalculates them after a timezone change', () => {
+    const record = makeRecord('timezone-range', { timestamp: '2026-11-08T01:00:00Z' })
+    const entries = Object.freeze([record])
+    const before = structuredClone(entries)
+    const view = renderHistory(entries, 'America/Los_Angeles')
+    selectDate('2026-11-07')
+    selectPeriod('Custom')
+    fireEvent.change(customDateInput('End date'), { target: { value: '2026-11-08' } })
+    selectPeriod('Weekly')
+    selectPeriod('Custom')
+    expect(customDateInput('Start date').value).toBe('2026-11-07')
+    expect(customDateInput('End date').value).toBe('2026-11-08')
+    const originalRange = periodRangeText()
+
+    view.rerender(<HistoryPage entries={entries} timeZone="Asia/Tokyo" dailyLimitMl={null} />)
+    expect(customDateInput('Start date').value).toBe('2026-11-07')
+    expect(customDateInput('End date').value).toBe('2026-11-08')
+    expect(periodRangeText()).not.toBe(originalRange)
+    expect(entries).toEqual(before)
+    expect(record.entry.consumedAt).toBe('2026-11-08T01:00:00.000Z')
+  })
+
   it('keeps the selected civil date when the reporting timezone changes', () => {
     const record = makeRecord('zone-edge', { timestamp: '2026-11-08T01:00:00Z' })
     const entries = Object.freeze([record])
@@ -338,5 +441,8 @@ describe('read-only session history', () => {
     expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Daily' }))
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('radio', { name: 'Weekly' })).toHaveProperty('checked', true)
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(screen.getByRole('radio', { name: 'Custom' })).toHaveProperty('checked', true)
+    expect(customDateInput('Start date')).toBeDefined()
   })
 })
