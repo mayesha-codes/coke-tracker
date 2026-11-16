@@ -9,6 +9,7 @@ import { useSession } from './app/session/sessionContext'
 import { createSessionState, transitionSession } from './app/session/sessionState'
 import type { SessionEntryRecord, SessionState } from './app/session/sessionState'
 import { createDrinkEntry } from './domain/entries'
+import { createNutritionReference } from './domain/nutrition'
 import type { CreateDrinkEntryInput, TrackingSettings } from './domain/types'
 import type { PersonalNutritionDraft } from './features/nutrition/nutritionInput'
 
@@ -43,6 +44,8 @@ function SessionTestControls() {
     <aside aria-label="Test session controls">
       <button type="button" onClick={() => updatePreferences({ ...state.preferences, currency: 'USD' })}>Use USD in test</button>
       <button type="button" onClick={() => updatePreferences({ ...state.preferences, reportingTimeZone: 'UTC' })}>Use UTC in test</button>
+      <button type="button" onClick={() => updatePreferences({ ...state.preferences, reportingTimeZone: 'Asia/Tokyo' })}>Use Tokyo in test</button>
+      <button type="button" onClick={() => updatePreferences({ ...state.preferences, dailyLimitMl: 500 })}>Set 500 ml goal in test</button>
       <output data-testid="test-session-history">{JSON.stringify(state.entries)}</output>
     </aside>
   )
@@ -64,6 +67,37 @@ function makeState(preferences: TrackingSettings): SessionState {
   const result = createSessionState(preferences)
   if (result.valid === false) throw new Error('Expected valid test preferences.')
   return result.state
+}
+
+function makeStateWithEntry(preferences: TrackingSettings): SessionState {
+  const initial = makeState(preferences)
+  const reference = createNutritionReference({
+    id: 'dashboard-test-reference',
+    version: 1,
+    productDescription: 'Illustrative dashboard drink',
+    sugarGramsPer100Ml: 10,
+    kcalPer100Ml: 42,
+    source: { label: 'Illustrative test package label' },
+  })
+  if (reference.valid === false) throw new Error('Expected valid illustrative nutrition data.')
+  const entry = createDrinkEntry({
+    id: 'dashboard-test-entry',
+    consumedAt: '2026-11-07T15:00:00.000Z',
+    quantity: 1,
+    servingMl: 330,
+    totalPriceMinor: null,
+    currency: preferences.currency,
+  }, reference.reference)
+  if (entry.valid === false) throw new Error('Expected a valid illustrative drink entry.')
+  const added = transitionSession(initial, {
+    type: 'add-entry',
+    record: {
+      entry: entry.entry,
+      nutritionProvenance: { kind: 'user-provided', reference: reference.reference },
+    },
+  })
+  if (added.outcome !== 'accepted') throw new Error('Expected the illustrative session entry to be accepted.')
+  return added.state
 }
 
 function quantityInput() {
@@ -124,6 +158,83 @@ async function selectPersonalNutrition(user: ReturnType<typeof userEvent.setup>,
 async function navigate(user: ReturnType<typeof userEvent.setup>, view: 'Home' | 'Log' | 'History' | 'Settings') {
   await user.click(screen.getByRole('button', { name: view }))
 }
+
+describe('Home dashboard session integration', () => {
+  it('retains a 1000 ml goal after saving through the real session Provider', async () => {
+    const { user } = renderApp({ controls: true })
+
+    await navigate(user, 'Settings')
+    fillNutritionSettings()
+    await user.click(screen.getByRole('button', { name: 'Apply personal nutrition' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Disable daily volume goal' }))
+    await user.type(screen.getByLabelText('Daily volume limit (ml)'), '1000')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+
+    await navigate(user, 'Home')
+    expect(screen.getByText('1,000 ml remaining of 1,000 ml.')).toBeDefined()
+
+    await navigate(user, 'Log')
+    await user.click(screen.getByRole('radio', { name: 'Price unknown' }))
+    const personalOption = within(nutritionSelect()).getByRole('option', { name: /Illustrative personal can/ })
+    await user.selectOptions(nutritionSelect(), (personalOption as HTMLOptionElement).value)
+    await user.click(screen.getByRole('button', { name: 'Save entry' }))
+    expect(screen.getByText('Saved for this session only.')).toBeDefined()
+    expect(savedSessionEntries()).toHaveLength(1)
+
+    await navigate(user, 'Settings')
+    expect(screen.getByLabelText<HTMLInputElement>('Daily volume limit (ml)').value).toBe('1000')
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Disable daily volume goal' }).checked).toBe(false)
+
+    await navigate(user, 'Home')
+    expect(screen.getByText('670 ml remaining of 1,000 ml.')).toBeDefined()
+    expect(screen.getByRole('progressbar')).toHaveProperty('max', 1000)
+  })
+
+  it('shows a goal configured in Settings as soon as Home is reopened', async () => {
+    const initialState = makeStateWithEntry({
+      currency: 'JPY',
+      reportingTimeZone: 'Asia/Tokyo',
+      dailyLimitMl: null,
+    })
+    const { user } = renderApp({ initialState })
+
+    await navigate(user, 'Settings')
+    await user.click(screen.getByRole('checkbox', { name: 'Disable daily volume goal' }))
+    await user.type(screen.getByLabelText('Daily volume limit (ml)'), '500')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+
+    await navigate(user, 'Home')
+    expect(screen.getByText('170 ml remaining of 500 ml.')).toBeDefined()
+    expect(screen.getByRole('progressbar')).toHaveProperty('value', 330)
+  })
+
+  it('recalculates today after timezone and goal preferences change', async () => {
+    const initialState = makeStateWithEntry({
+      currency: 'JPY',
+      reportingTimeZone: 'UTC',
+      dailyLimitMl: null,
+    })
+    const { user } = renderApp({ initialState, controls: true })
+
+    expect(screen.getByRole('heading', { name: 'Today' })).toBeDefined()
+    expect(screen.getByText('0 entries · 0 drinks')).toBeDefined()
+    expect(screen.getByText('Set a daily volume limit in Settings to track progress here.')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Use Tokyo in test' }))
+    expect(screen.getByText('1 entry · 1 drink')).toBeDefined()
+    expect(screen.getByRole('region', { name: 'Daily volume goal' }).textContent).toContain('330 ml')
+    expect(screen.getByText('Set a daily volume limit in Settings to track progress here.')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Set 500 ml goal in test' }))
+    expect(screen.getByText('170 ml remaining of 500 ml.')).toBeDefined()
+    expect(screen.getByRole('progressbar')).toHaveProperty('value', 330)
+    expect(screen.getByText(/Refreshing or closing the app clears entries and preferences/)).toBeDefined()
+  })
+})
 
 describe('shared preferences across the application views', () => {
   it('starts the application with editable yen and Tokyo suggestions', async () => {

@@ -62,7 +62,11 @@ function App() {
         )}
       </div>
       {activeView === 'settings' ? <PreferencesPage hasLogDraft={hasVisitedLog} /> : activeView === 'home' ? (
-        <DashboardPage />
+        <DashboardPage
+          entries={state.entries}
+          timeZone={reportingTimeZone}
+          dailyLimitMl={state.preferences.dailyLimitMl}
+        />
       ) : null}
     </AppShell>
   )

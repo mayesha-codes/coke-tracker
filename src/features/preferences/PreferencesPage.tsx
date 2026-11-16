@@ -33,6 +33,7 @@ function samePreferences(first: TrackingSettings, second: TrackingSettings): boo
 function fieldSelector(field: PreferenceIssueField): string {
   if (field === 'currency') return '#preferences-currency'
   if (field === 'reportingTimeZone') return '#preferences-timezone'
+  if (field === 'dailyLimitMl') return '#preferences-daily-limit'
   return '#preferences-error-summary'
 }
 
@@ -48,14 +49,19 @@ function PreferencesPage({ hasLogDraft = false }: PreferencesPageProps) {
   const { state, updatePreferences, lastPreferenceResult } = useSession()
   const [currency, setCurrency] = useState(state.preferences.currency)
   const [reportingTimeZone, setReportingTimeZone] = useState(state.preferences.reportingTimeZone)
+  const [dailyLimitText, setDailyLimitText] = useState(state.preferences.dailyLimitMl === null
+    ? '' : String(state.preferences.dailyLimitMl))
+  const [dailyGoalDisabled, setDailyGoalDisabled] = useState(state.preferences.dailyLimitMl === null)
   const [touched, setTouched] = useState<Partial<Record<PreferenceIssueField, boolean>>>({})
   const [submitted, setSubmitted] = useState(false)
   const [pending, setPending] = useState<PendingApplication | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const pendingFocus = useRef<PreferenceIssueField | null>(null)
 
-  // Preserve the setting that this page does not edit, rather than resetting a future goal.
-  const candidate: TrackingSettings = { currency, reportingTimeZone, dailyLimitMl: state.preferences.dailyLimitMl }
+  const parsedDailyLimit = dailyGoalDisabled
+    ? null
+    : /^\d+$/.test(dailyLimitText) ? Number(dailyLimitText) : Number.NaN
+  const candidate: TrackingSettings = { currency, reportingTimeZone, dailyLimitMl: parsedDailyLimit }
   const checked = validatePreferences(candidate)
   const applicationResult = pending !== null && lastPreferenceResult !== pending.previousResult
     ? lastPreferenceResult : null
@@ -104,6 +110,7 @@ function PreferencesPage({ hasLogDraft = false }: PreferencesPageProps) {
 
   const currencyError = fieldError('currency')
   const timezoneError = fieldError('reportingTimeZone')
+  const dailyLimitError = fieldError('dailyLimitMl')
 
   return (
     <div className="preferences-page">
@@ -162,6 +169,26 @@ function PreferencesPage({ hasLogDraft = false }: PreferencesPageProps) {
                 <p className="preferences-help" id="preferences-timezone-help">Enter an IANA timezone such as Asia/Tokyo, Asia/Dhaka, America/New_York, or UTC. Other supported IANA zones are welcome.</p>
                 {timezoneError && <p className="preferences-error" id="preferences-timezone-error">{timezoneError}</p>}
               </div>
+
+              <fieldset className="preferences-field preferences-goal">
+                <legend>Daily Volume Goal</legend>
+                <label htmlFor="preferences-daily-limit">Daily volume limit (ml)</label>
+                <input id="preferences-daily-limit" className="preferences-input" type="text"
+                  inputMode="numeric" pattern="[0-9]*" value={dailyLimitText} disabled={dailyGoalDisabled}
+                  aria-invalid={Boolean(dailyLimitError)}
+                  aria-describedby={`preferences-daily-limit-help${dailyLimitError ? ' preferences-daily-limit-error' : ''}`}
+                  onBlur={() => setTouched(previous => ({ ...previous, dailyLimitMl: true }))}
+                  onChange={event => { setDailyLimitText(event.currentTarget.value); setPending(null) }} />
+                <p className="preferences-help" id="preferences-daily-limit-help">
+                  Set a nonnegative whole-number volume limit for each calendar day in {reportingTimeZone}. Enter 0 for a zero-volume goal.
+                </p>
+                {dailyLimitError && <p className="preferences-error" id="preferences-daily-limit-error">{dailyLimitError}</p>}
+                <label className="preferences-goal__disable" htmlFor="preferences-goal-disabled">
+                  <input id="preferences-goal-disabled" type="checkbox" checked={dailyGoalDisabled}
+                    onChange={event => { setDailyGoalDisabled(event.currentTarget.checked); setPending(null) }} />
+                  Disable daily volume goal
+                </label>
+              </fieldset>
 
               <div className="preferences-draft-note">
                 <strong>Your unfinished Log draft stays with you between pages.</strong>

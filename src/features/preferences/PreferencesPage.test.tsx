@@ -47,6 +47,14 @@ function timezoneField() {
   return screen.getByLabelText<HTMLInputElement>('Reporting timezone')
 }
 
+function dailyLimitField() {
+  return screen.getByLabelText<HTMLInputElement>('Daily volume limit (ml)')
+}
+
+function disableDailyGoalField() {
+  return screen.getByRole<HTMLInputElement>('checkbox', { name: 'Disable daily volume goal' })
+}
+
 function storedPreferences(): TrackingSettings {
   return JSON.parse(screen.getByTestId('stored-preferences').textContent ?? '{}')
 }
@@ -62,7 +70,78 @@ describe('international session preferences', () => {
     ])
     expect(screen.queryByRole('combobox', { name: /language|country/i })).toBeNull()
     expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
+    expect(screen.getByRole('group', { name: 'Daily Volume Goal' })).toBeDefined()
+    expect(dailyLimitField().disabled).toBe(true)
+    expect(disableDailyGoalField().checked).toBe(true)
   })
+
+  it('renders an existing numeric daily volume goal as enabled', () => {
+    setup({ preferences: { ...INITIAL_USER_PREFERENCES, dailyLimitMl: 750 } })
+    expect(dailyLimitField().value).toBe('750')
+    expect(dailyLimitField().disabled).toBe(false)
+    expect(disableDailyGoalField().checked).toBe(false)
+  })
+
+  it('configures a whole-number daily volume goal through the shared preferences update', async () => {
+    const user = setup()
+    await user.click(disableDailyGoalField())
+    await user.type(dailyLimitField(), '750')
+    expect(storedPreferences().dailyLimitMl).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+
+    expect(storedPreferences().dailyLimitMl).toBe(750)
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+  })
+
+  it('disables a configured goal without changing its meaning to zero', async () => {
+    const user = setup({ preferences: { ...INITIAL_USER_PREFERENCES, dailyLimitMl: 500 } })
+    expect(dailyLimitField().value).toBe('500')
+    await user.click(disableDailyGoalField())
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+
+    expect(storedPreferences().dailyLimitMl).toBeNull()
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+  })
+
+  it('accepts zero as a configured zero-volume goal', async () => {
+    const user = setup()
+    await user.click(disableDailyGoalField())
+    await user.type(dailyLimitField(), '0')
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+
+    expect(storedPreferences().dailyLimitMl).toBe(0)
+    expect(disableDailyGoalField().checked).toBe(false)
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent)
+      .toBe('Preferences applied for this session.')
+  })
+
+  it('rejects an empty enabled goal and focuses its field without changing preferences', async () => {
+    const user = setup()
+    await user.click(disableDailyGoalField())
+    await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+
+    expect(document.activeElement).toBe(dailyLimitField())
+    expect(dailyLimitField().getAttribute('aria-invalid')).toBe('true')
+    expect(dailyLimitField().getAttribute('aria-describedby')).toContain('preferences-daily-limit-error')
+    expect(document.getElementById('preferences-daily-limit-error')?.textContent).toContain('nonnegative safe integer')
+    expect(storedPreferences().dailyLimitMl).toBeNull()
+    expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
+  })
+
+  it.each(['-1', '1.5', 'Infinity', '9007199254740992', '1e3'])(
+    'rejects unsupported daily volume input %j', async value => {
+      const user = setup()
+      await user.click(disableDailyGoalField())
+      fireEvent.change(dailyLimitField(), { target: { value } })
+      await user.click(screen.getByRole('button', { name: 'Apply preferences' }))
+
+      expect(dailyLimitField().getAttribute('aria-invalid')).toBe('true')
+      expect(storedPreferences().dailyLimitMl).toBeNull()
+      expect(screen.getByRole('status', { name: 'Preference application status' }).textContent).toBe('')
+    },
+  )
 
   it('keeps edits local until Apply and then preserves the existing daily limit', async () => {
     const user = setup({ preferences: { ...INITIAL_USER_PREFERENCES, dailyLimitMl: 500 } })
