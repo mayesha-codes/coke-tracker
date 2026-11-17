@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { createDrinkEntry } from '../../domain/entries'
 import { createNutritionReference } from '../../domain/nutrition'
 import type { CurrencyCode } from '../../domain/types'
@@ -10,7 +10,7 @@ import DashboardPage from './DashboardPage'
 const referenceTime = '2026-11-08T09:30:00.000Z'
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
   vi.setSystemTime(new Date(referenceTime))
 })
 
@@ -199,5 +199,94 @@ describe('today dashboard and volume goal', () => {
     const spending = screen.getByRole('region', { name: 'Today’s spending' })
     expect(spending.textContent?.replace(/\u00a0/g, ' ')).toContain('JPY 300')
     expect(spending.textContent).not.toContain('USD')
+  })
+})
+
+describe('weekly dashboard context', () => {
+  function weeklyRegion() {
+    return screen.getByRole('region', { name: 'This Week' })
+  }
+
+  function weeklyMetric(label: string): string {
+    return within(weeklyRegion()).getByText(label, { selector: 'dt' })
+      .nextElementSibling?.textContent?.replace(/\s+/g, ' ') ?? ''
+  }
+
+  it('shows an empty week with the Monday-to-Sunday range and reporting timezone', () => {
+    renderDashboard(Object.freeze([
+      record('last-week', { consumedAt: '2026-11-01T14:59:59.999Z' }),
+      record('next-week', { consumedAt: '2026-11-08T15:00:00.000Z' }),
+    ]), { timeZone: 'Asia/Tokyo' })
+
+    expect(within(weeklyRegion()).getByText('Nov 2, 2026 – Nov 8, 2026')).toBeDefined()
+    expect(within(weeklyRegion()).getByText('Reporting timezone: Asia/Tokyo')).toBeDefined()
+    expect(weeklyMetric('Drinks this week')).toBe('0')
+    expect(weeklyMetric('Total volume this week')).toContain('0')
+    expect(within(weeklyRegion()).getByText('No drinks recorded this week yet.')).toBeDefined()
+    expect(within(weeklyRegion()).getByText(/weekly total, not a daily trend/)).toBeDefined()
+  })
+
+  it('includes both exact Tokyo week boundaries, excludes outside entries, and counts saved drinks', () => {
+    renderDashboard(Object.freeze([
+      record('at-start', { consumedAt: '2026-11-01T15:00:00.000Z', quantity: 2, servingMl: 330 }),
+      record('middle-backdated', { consumedAt: '2026-11-03T04:00:00.000Z', quantity: 3, servingMl: 500 }),
+      record('at-end-minus-one', { consumedAt: '2026-11-08T14:59:59.999Z', quantity: 1, servingMl: 200 }),
+      record('before-week', { consumedAt: '2026-11-01T14:59:59.999Z' }),
+      record('at-exclusive-end', { consumedAt: '2026-11-08T15:00:00.000Z' }),
+    ]), { timeZone: 'Asia/Tokyo' })
+
+    expect(weeklyMetric('Drinks this week')).toBe('6')
+    expect(weeklyMetric('Total volume this week')).toContain('2,360')
+    expect(within(weeklyRegion()).getByText('Nov 2, 2026 – Nov 8, 2026')).toBeDefined()
+    expect(metric('Drinks')).toBe('1') // Only the final in-week entry also falls inside today.
+  })
+
+  it('recalculates calendar weeks and today after a reporting timezone change without mutating saved records', () => {
+    vi.setSystemTime(new Date('2026-11-02T00:30:00.000Z'))
+    const entry = record('zone-boundary', {
+      consumedAt: '2026-11-01T20:00:00.000Z', quantity: 2, servingMl: 350,
+    })
+    const entries = Object.freeze([entry])
+    const original = structuredClone(entries)
+    const view = renderDashboard(entries, { timeZone: 'Asia/Tokyo' })
+
+    expect(within(weeklyRegion()).getByText('Nov 2, 2026 – Nov 8, 2026')).toBeDefined()
+    expect(weeklyMetric('Drinks this week')).toBe('2')
+    expect(metric('Drinks')).toBe('2')
+    view.rerender(<DashboardPage
+      entries={entries}
+      timeZone="UTC"
+      dailyLimitMl={null}
+      onViewHistory={vi.fn()}
+    />)
+
+    expect(within(weeklyRegion()).getByText('Nov 2, 2026 – Nov 8, 2026')).toBeDefined()
+    // Tokyo's Monday began before this instant; UTC's Monday begins after it.
+    expect(weeklyMetric('Drinks this week')).toBe('0')
+    expect(metric('Drinks')).toBe('0')
+    expect(entries).toEqual(original)
+    expect(entry.entry.consumedAt).toBe('2026-11-01T20:00:00.000Z')
+    expect(Object.isFrozen(entry.entry.nutrition)).toBe(true)
+  })
+
+  it('refreshes daily and weekly summaries at the next reporting-day boundary and cleans up its timer', async () => {
+    vi.setSystemTime(new Date('2026-11-08T14:59:59.000Z'))
+    const entries = Object.freeze([record('before-midnight', {
+      consumedAt: '2026-11-08T14:59:59.000Z',
+    })])
+    const view = renderDashboard(entries, { timeZone: 'Asia/Tokyo' })
+    expect(screen.getByText('Sunday, November 8')).toBeDefined()
+    expect(metric('Drinks')).toBe('1')
+    expect(weeklyMetric('Drinks this week')).toBe('1')
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_001)
+    })
+
+    expect(screen.getByText('Monday, November 9')).toBeDefined()
+    expect(metric('Drinks')).toBe('0')
+    expect(weeklyMetric('Drinks this week')).toBe('0')
+    view.unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

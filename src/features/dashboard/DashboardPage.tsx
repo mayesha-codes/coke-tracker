@@ -1,8 +1,10 @@
-import { useId } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { SessionEntryRecord } from '../../app/session/sessionState'
-import { calculateDailySummary } from '../../domain/reporting'
+import { calculateDailySummary, calculatePeriodTotals } from '../../domain/reporting'
 import type { DailySummaryResult } from '../../domain/reporting'
 import { formatMoney } from '../../domain/money'
+import { getCalendarDayPeriod, getCalendarWeekPeriod } from '../../domain/periods'
+import type { ReportingPeriod } from '../../domain/periods'
 import type { ConsumptionTotals } from '../../domain/totals'
 import type { TrackingSettings } from '../../domain/types'
 import RecentSessionEntries from '../logging/RecentSessionEntries'
@@ -33,6 +35,20 @@ function formatToday(referenceUtc: string, timeZone: string): string {
   } catch {
     return 'Today'
   }
+}
+
+function formatPeriodDate(timestamp: string, timeZone: string): string {
+  return new Intl.DateTimeFormat(ENGLISH_DISPLAY_LOCALE, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone,
+  }).format(new Date(timestamp))
+}
+
+function formatWeekRange(period: ReportingPeriod): string {
+  const lastInstant = new Date(Date.parse(period.endUtc) - 1).toISOString()
+  return `${formatPeriodDate(period.startUtc, period.timeZone)} – ${formatPeriodDate(lastInstant, period.timeZone)}`
 }
 
 function goalMessage(result: Extract<DailySummaryResult, { valid: true }>): string {
@@ -146,13 +162,72 @@ function SpendingOverview({ totals }: { totals: ConsumptionTotals }) {
   )
 }
 
+function WeeklyContext({ entries, referenceUtc, timeZone }: {
+  entries: readonly SessionEntryRecord[]
+  referenceUtc: string
+  timeZone: string
+}) {
+  const headingId = useId()
+  const period = getCalendarWeekPeriod(referenceUtc, timeZone)
+  const drinkEntries = entries.map(record => record.entry)
+  const result = period.valid
+    ? calculatePeriodTotals(drinkEntries, period.period)
+    : period
+
+  return (
+    <section className="dashboard-week" aria-labelledby={headingId}>
+      <div className="dashboard-week__heading">
+        <div>
+          <p className="dashboard-eyebrow">Weekly context</p>
+          <h2 id={headingId}>This Week</h2>
+        </div>
+        <div className="dashboard-week__period">
+          {period.valid ? (
+            <>
+              <p>{formatWeekRange(period.period)}</p>
+              <span>Reporting timezone: {timeZone}</span>
+            </>
+          ) : (
+            <p>Reporting timezone: {timeZone}</p>
+          )}
+        </div>
+      </div>
+
+      {result.valid ? (
+        <>
+          <dl className="dashboard-week__metrics">
+            <div><dt>Drinks this week</dt><dd>{formatNumber(result.totals.drinkCount)}</dd></div>
+            <div><dt>Total volume this week</dt><dd>{formatNumber(result.totals.volumeMl)} <small>ml</small></dd></div>
+          </dl>
+          {result.totals.entryCount === 0 && (
+            <p className="dashboard-week__empty">No drinks recorded this week yet.</p>
+          )}
+        </>
+      ) : (
+        <p className="dashboard-week__error" role="alert">Weekly summary is unavailable: {result.issues.map(issue => issue.message).join(' ')}</p>
+      )}
+      <p className="dashboard-week__note">Monday through Sunday in your reporting timezone. This is a weekly total, not a daily trend.</p>
+    </section>
+  )
+}
+
 function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: DashboardPageProps) {
-  const summaryId = useId()
-  // The caller supplies the clock reference to the pure reporting API. A fresh
-  // value on render means returning to Home and session updates recalculate today.
+  const [, setDayRefresh] = useState(0)
   const referenceUtc = new Date().toISOString()
+  const summaryId = useId()
   const drinkEntries = entries.map(record => record.entry)
   const summary = calculateDailySummary(drinkEntries, referenceUtc, dailyLimitMl, timeZone)
+
+  // Refresh once at the next reporting-day boundary. The domain period supplies
+  // the timezone-aware instant, including DST changes; cleanup handles navigation.
+  useEffect(() => {
+    const day = getCalendarDayPeriod(referenceUtc, timeZone)
+    if (day.valid === false) return
+
+    const delay = Math.max(1, Date.parse(day.period.endUtc) - Date.now() + 1)
+    const timeout = window.setTimeout(() => setDayRefresh(value => value + 1), delay)
+    return () => window.clearTimeout(timeout)
+  }, [referenceUtc, timeZone])
 
   return (
     <div className="dashboard-page">
@@ -190,6 +265,7 @@ function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: Dashb
 
           <DailyGoal result={summary} />
           <SpendingOverview totals={summary.totals} />
+          <WeeklyContext entries={entries} referenceUtc={referenceUtc} timeZone={timeZone} />
         </>
       ) : (
         <section className="dashboard-error" role="alert" aria-label="Today's summary unavailable">

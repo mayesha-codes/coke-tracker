@@ -7,7 +7,8 @@
 
 .dashboard-heading,
 .dashboard-overview__heading,
-.dashboard-goal__heading {
+.dashboard-goal__heading,
+.dashboard-week__heading {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -56,6 +57,7 @@
 .dashboard-overview,
 .dashboard-goal,
 .dashboard-spending,
+.dashboard-week,
 .dashboard-error {
   display: grid;
   gap: var(--space-4);
@@ -71,10 +73,87 @@
 .dashboard-overview h2,
 .dashboard-goal h2,
 .dashboard-spending h2,
+.dashboard-week h2,
 .dashboard-error h2 {
   margin: 0;
   font-size: var(--text-heading);
   letter-spacing: -0.035em;
+}
+
+.dashboard-week {
+  background:
+    radial-gradient(ellipse at 100% 100%, rgb(227 34 53 / 7%), transparent 58%),
+    var(--color-surface);
+}
+
+.dashboard-week__heading {
+  align-items: center;
+}
+
+.dashboard-week__period {
+  min-width: 0;
+  text-align: right;
+}
+
+.dashboard-week__period p,
+.dashboard-week__period span,
+.dashboard-week__empty,
+.dashboard-week__note,
+.dashboard-week__error {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-week__period span {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.dashboard-week__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.dashboard-week__metrics > div {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgb(16 17 22 / 48%);
+}
+
+.dashboard-week__metrics dt {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.dashboard-week__metrics dd {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-week__metrics small {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.dashboard-week__note {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.dashboard-week__error {
+  color: var(--color-text);
 }
 
 .dashboard-spending__heading {
@@ -319,8 +398,13 @@
 
 @media (max-width: 42rem) {
   .dashboard-heading,
-  .dashboard-overview__heading {
+  .dashboard-overview__heading,
+  .dashboard-week__heading {
     align-items: flex-start;
+  }
+
+  .dashboard-week__period {
+    text-align: left;
   }
 
   .dashboard-overview__metrics {
