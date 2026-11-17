@@ -160,6 +160,25 @@ async function navigate(user: ReturnType<typeof userEvent.setup>, view: 'Home' |
 }
 
 describe('Home dashboard session integration', () => {
+  it('shows recent saved activity and navigates to the full History page', async () => {
+    const earlier = withIllustrativeSavedEntry(personalState(), {
+      consumedAt: '2026-11-07T09:00:00Z', currency: 'USD', totalPriceMinor: 250,
+    })
+    const initialState = withIllustrativeSavedEntry(earlier, {
+      consumedAt: '2020-01-01T00:00:00Z', currency: 'JPY', totalPriceMinor: 0,
+    })
+    const { user } = renderApp({ initialState })
+
+    const recent = screen.getByRole('region', { name: 'Recent activity' })
+    const rows = within(recent).getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByRole('heading', { name: 'Illustrative personal can' })).toBeDefined()
+    expect(rows[0].textContent?.replace(/\u00a0/g, ' ')).toContain('JPY 0')
+    expect(rows[1].textContent?.replace(/\u00a0/g, ' ')).toContain('USD 2.50')
+    await user.click(within(recent).getByRole('button', { name: 'View full history' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'History' })).toBeDefined()
+  })
+
   it('retains a 1000 ml goal after saving through the real session Provider', async () => {
     const { user } = renderApp({ controls: true })
 

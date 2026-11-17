@@ -26,6 +26,8 @@ function record(id: string, options: {
   servingMl?: number
   sugar?: number
   kcal?: number
+  price?: number | null
+  currency?: CurrencyCode
 } = {}): SessionEntryRecord {
   const reference = createNutritionReference({
     id: `test-reference-${id}`,
@@ -42,8 +44,8 @@ function record(id: string, options: {
     consumedAt: options.consumedAt ?? '2026-11-08T00:00:00.000Z',
     quantity: options.quantity ?? 1,
     servingMl: options.servingMl ?? 330,
-    totalPriceMinor: 0,
-    currency: 'JPY' satisfies CurrencyCode,
+    totalPriceMinor: options.price === undefined ? 0 : options.price,
+    currency: options.currency ?? 'JPY' satisfies CurrencyCode,
   }, reference.reference)
   if (entry.valid === false) throw new Error('Expected a valid test entry.')
 
@@ -57,10 +59,12 @@ function renderDashboard(entries: readonly SessionEntryRecord[], options: {
   timeZone?: string
   dailyLimitMl?: number | null
 } = {}) {
+  const onViewHistory = vi.fn()
   return render(<DashboardPage
     entries={entries}
     timeZone={options.timeZone ?? 'Asia/Tokyo'}
     dailyLimitMl={options.dailyLimitMl === undefined ? null : options.dailyLimitMl}
+    onViewHistory={onViewHistory}
   />)
 }
 
@@ -145,5 +149,55 @@ describe('today dashboard and volume goal', () => {
     renderDashboard(Object.freeze([record('over-zero')]), { dailyLimitMl: 0 })
     expect(screen.getByText('330 ml over your zero-volume limit.')).toBeDefined()
     expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
+  it('shows an empty spending state when there are no drinks today', () => {
+    renderDashboard(Object.freeze([]))
+    expect(screen.getByRole('region', { name: 'Today’s spending' })).toBeDefined()
+    expect(screen.getByText('No spending entries recorded today.')).toBeDefined()
+  })
+
+  it('formats known zero and positive spending separately by original currency', () => {
+    renderDashboard(Object.freeze([
+      record('jpy-zero', { currency: 'JPY', price: 0 }),
+      record('usd-one', { currency: 'USD', price: 125 }),
+      record('usd-two', { currency: 'USD', price: 250 }),
+      record('bdt', { currency: 'BDT', price: 12050 }),
+    ]))
+    const spending = screen.getByRole('region', { name: 'Today’s spending' })
+    const rows = within(spending).getAllByRole('listitem')
+    expect(rows).toHaveLength(3)
+    expect(within(rows[0]).getByRole('heading', { name: 'BDT' })).toBeDefined()
+    expect(rows[0].textContent?.replace(/\u00a0/g, ' ')).toContain('BDT 120.50')
+    expect(within(rows[1]).getByRole('heading', { name: 'JPY' })).toBeDefined()
+    expect(rows[1].textContent?.replace(/\u00a0/g, ' ')).toContain('JPY 0')
+    expect(rows[2].textContent?.replace(/\u00a0/g, ' ')).toContain('USD 3.75')
+    expect(within(spending).getAllByText('Complete')).toHaveLength(3)
+    expect(spending.textContent).not.toContain('Total spending')
+  })
+
+  it('labels known-price subtotals incomplete when entries have unknown prices', () => {
+    renderDashboard(Object.freeze([
+      record('usd-known', { currency: 'USD', price: 125 }),
+      record('usd-unknown', { currency: 'USD', price: null }),
+      record('eur-unknown', { currency: 'EUR', price: null }),
+    ]))
+    const spending = screen.getByRole('region', { name: 'Today’s spending' })
+    expect(spending.textContent).toContain('2 entries have an unknown price')
+    const rows = within(spending).getAllByRole('listitem')
+    expect(rows.find(row => row.textContent?.includes('USD'))?.textContent?.replace(/\u00a0/g, ' ')).toContain('USD 1.25')
+    expect(rows.find(row => row.textContent?.includes('USD'))?.textContent).toContain('Incomplete · 1 unknown')
+    expect(rows.find(row => row.textContent?.includes('EUR'))?.textContent?.replace(/\u00a0/g, ' ')).toContain('EUR 0.00')
+    expect(rows.find(row => row.textContent?.includes('EUR'))?.textContent).toContain('Incomplete · 1 unknown')
+  })
+
+  it('shows only today’s spending in the reporting timezone', () => {
+    renderDashboard(Object.freeze([
+      record('today-tokyo', { consumedAt: '2026-11-07T15:00:00Z', currency: 'JPY', price: 300 }),
+      record('yesterday-tokyo', { consumedAt: '2026-11-07T14:59:59.999Z', currency: 'USD', price: 250 }),
+    ]), { timeZone: 'Asia/Tokyo' })
+    const spending = screen.getByRole('region', { name: 'Today’s spending' })
+    expect(spending.textContent?.replace(/\u00a0/g, ' ')).toContain('JPY 300')
+    expect(spending.textContent).not.toContain('USD')
   })
 })

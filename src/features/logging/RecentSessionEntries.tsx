@@ -9,6 +9,9 @@ import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 interface RecentSessionEntriesProps {
   entries: readonly SessionEntryRecord[]
   timeZone: string
+  heading?: string
+  onViewHistory?: () => void
+  showTemporaryNotice?: boolean
 }
 
 /** Formatting changes the display only, never the stored UTC instant. */
@@ -78,7 +81,13 @@ function RecentEntry({ record, timeZone }: { record: SessionEntryRecord; timeZon
 }
 
 /** A view of accepted session records, with no separate history state or announcements. */
-function RecentSessionEntries({ entries, timeZone }: RecentSessionEntriesProps) {
+function RecentSessionEntries({
+  entries,
+  timeZone,
+  heading = 'Recent session entries',
+  onViewHistory,
+  showTemporaryNotice = true,
+}: RecentSessionEntriesProps) {
   const headingId = useId()
   // Session transitions append accepted entries. Consumption dates do not determine save order.
   const recentEntries = entries.slice(-5).reverse()
@@ -88,10 +97,17 @@ function RecentSessionEntries({ entries, timeZone }: RecentSessionEntriesProps) 
       <header className="logging-recent__heading">
         <div>
           <p className="logging-eyebrow">Already recorded</p>
-          <h2 id={headingId}>Recent session entries</h2>
+          <h2 id={headingId}>{heading}</h2>
           <p className="logging-recent__help">Up to five most recently saved entries, newest first.</p>
         </div>
-        <p className="logging-recent__zone">Reporting timezone: {timeZone}</p>
+        <div className="logging-recent__heading-actions">
+          {onViewHistory && (
+            <button className="logging-recent__history-action" type="button" onClick={onViewHistory}>
+              View full history
+            </button>
+          )}
+          <p className="logging-recent__zone">Reporting timezone: {timeZone}</p>
+        </div>
       </header>
 
       {recentEntries.length === 0 ? (
@@ -102,7 +118,9 @@ function RecentSessionEntries({ entries, timeZone }: RecentSessionEntriesProps) 
         </ol>
       )}
 
-      <p className="logging-recent__temporary">Refreshing or closing the app clears session entries and preferences.</p>
+      {showTemporaryNotice && (
+        <p className="logging-recent__temporary">Refreshing or closing the app clears session entries and preferences.</p>
+      )}
     </section>
   )
 }

@@ -66,6 +66,7 @@ function App() {
           entries={state.entries}
           timeZone={reportingTimeZone}
           dailyLimitMl={state.preferences.dailyLimitMl}
+          onViewHistory={() => navigate('history')}
         />
       ) : null}
     </AppShell>

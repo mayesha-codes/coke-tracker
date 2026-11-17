@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { NutritionProvenance, SessionEntryRecord } from '../../app/session/sessionState'
@@ -38,8 +38,8 @@ function record(id: string, options: {
   })
 }
 
-function region() {
-  return screen.getByRole('region', { name: 'Recent session entries' })
+function region(name = 'Recent session entries') {
+  return screen.getByRole('region', { name })
 }
 
 function metric(row: HTMLElement, label: string) {
@@ -47,6 +47,24 @@ function metric(row: HTMLElement, label: string) {
 }
 
 describe('recent accepted session records', () => {
+  it('supports a dashboard heading, optional History action, and no duplicate temporary notice', async () => {
+    const onViewHistory = vi.fn()
+    const user = userEvent.setup()
+    render(<RecentSessionEntries
+      entries={Object.freeze([])}
+      timeZone="Asia/Tokyo"
+      heading="Recent activity"
+      onViewHistory={onViewHistory}
+      showTemporaryNotice={false}
+    />)
+
+    const activity = region('Recent activity')
+    expect(within(activity).getByRole('button', { name: 'View full history' })).toBeDefined()
+    expect(within(activity).queryByText('Refreshing or closing the app clears session entries and preferences.')).toBeNull()
+    await user.click(within(activity).getByRole('button', { name: 'View full history' }))
+    expect(onViewHistory).toHaveBeenCalledOnce()
+  })
+
   it('shows an honest empty state and temporary-data notice without success announcements', () => {
     render(<RecentSessionEntries entries={Object.freeze([])} timeZone="Asia/Tokyo" />)
     expect(within(region()).getByText('No drinks saved this session yet.')).toBeDefined()

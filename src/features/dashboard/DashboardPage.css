@@ -55,6 +55,7 @@
 
 .dashboard-overview,
 .dashboard-goal,
+.dashboard-spending,
 .dashboard-error {
   display: grid;
   gap: var(--space-4);
@@ -69,10 +70,87 @@
 
 .dashboard-overview h2,
 .dashboard-goal h2,
+.dashboard-spending h2,
 .dashboard-error h2 {
   margin: 0;
   font-size: var(--text-heading);
   letter-spacing: -0.035em;
+}
+
+.dashboard-spending__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.dashboard-spending__unknown-total,
+.dashboard-spending__complete,
+.dashboard-spending__incomplete {
+  max-width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-spending__incomplete {
+  border-color: rgb(227 34 53 / 50%);
+  color: var(--color-text);
+  background: rgb(227 34 53 / 10%);
+}
+
+.dashboard-spending__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-spending__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgb(16 17 22 / 48%);
+}
+
+.dashboard-spending__item h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.dashboard-spending__item p,
+.dashboard-spending__empty,
+.dashboard-spending__note {
+  margin: var(--space-1) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.dashboard-spending__item strong {
+  font-size: var(--text-heading);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-spending__item > span {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.dashboard-spending__note {
+  margin-top: 0;
 }
 
 .dashboard-overview__metrics {

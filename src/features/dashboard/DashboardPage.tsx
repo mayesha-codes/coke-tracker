@@ -2,7 +2,10 @@ import { useId } from 'react'
 import type { SessionEntryRecord } from '../../app/session/sessionState'
 import { calculateDailySummary } from '../../domain/reporting'
 import type { DailySummaryResult } from '../../domain/reporting'
+import { formatMoney } from '../../domain/money'
+import type { ConsumptionTotals } from '../../domain/totals'
 import type { TrackingSettings } from '../../domain/types'
+import RecentSessionEntries from '../logging/RecentSessionEntries'
 import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 import './DashboardPage.css'
 
@@ -10,6 +13,7 @@ interface DashboardPageProps {
   entries: readonly SessionEntryRecord[]
   timeZone: string
   dailyLimitMl: TrackingSettings['dailyLimitMl']
+  onViewHistory: () => void
 }
 
 const numberFormat = new Intl.NumberFormat(ENGLISH_DISPLAY_LOCALE, { maximumFractionDigits: 2 })
@@ -92,7 +96,57 @@ function DailyGoal({ result }: { result: Extract<DailySummaryResult, { valid: tr
   )
 }
 
-function DashboardPage({ entries, timeZone, dailyLimitMl }: DashboardPageProps) {
+function SpendingOverview({ totals }: { totals: ConsumptionTotals }) {
+  const headingId = useId()
+
+  return (
+    <section className="dashboard-spending" aria-labelledby={headingId}>
+      <div className="dashboard-spending__heading">
+        <div>
+          <p className="dashboard-eyebrow">Today, by original currency</p>
+          <h2 id={headingId}>Today’s spending</h2>
+        </div>
+        {totals.unknownPriceEntryCount > 0 && (
+          <span className="dashboard-spending__unknown-total">
+            {totals.unknownPriceEntryCount} {totals.unknownPriceEntryCount === 1 ? 'entry has' : 'entries have'} an unknown price
+          </span>
+        )}
+      </div>
+
+      {totals.entryCount === 0 ? (
+        <p className="dashboard-spending__empty">No spending entries recorded today.</p>
+      ) : (
+        <ul className="dashboard-spending__list">
+          {totals.spendingByCurrency.map(row => {
+            const formatted = formatMoney(
+              { amountMinor: row.knownAmountMinor, currency: row.currency },
+              ENGLISH_DISPLAY_LOCALE,
+            )
+            const complete = row.unknownPriceEntryCount === 0
+
+            return (
+              <li className="dashboard-spending__item" key={row.currency}>
+                <div>
+                  <h3>{row.currency}</h3>
+                  <p>Known-price subtotal</p>
+                </div>
+                <strong>{formatted.valid ? formatted.formatted : 'Unavailable'}</strong>
+                <span className={complete ? 'dashboard-spending__complete' : 'dashboard-spending__incomplete'}>
+                  {complete ? 'Complete' : `Incomplete · ${row.unknownPriceEntryCount} unknown`}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <p className="dashboard-spending__note">
+        Unknown prices are excluded, so marked subtotals are incomplete. Amounts stay in each drink’s original currency; no conversion is applied.
+      </p>
+    </section>
+  )
+}
+
+function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: DashboardPageProps) {
   const summaryId = useId()
   // The caller supplies the clock reference to the pure reporting API. A fresh
   // value on render means returning to Home and session updates recalculate today.
@@ -135,6 +189,7 @@ function DashboardPage({ entries, timeZone, dailyLimitMl }: DashboardPageProps) 
           </section>
 
           <DailyGoal result={summary} />
+          <SpendingOverview totals={summary.totals} />
         </>
       ) : (
         <section className="dashboard-error" role="alert" aria-label="Today's summary unavailable">
@@ -142,6 +197,14 @@ function DashboardPage({ entries, timeZone, dailyLimitMl }: DashboardPageProps) 
           <p>{summary.issues.map(issue => issue.message).join(' ')}</p>
         </section>
       )}
+
+      <RecentSessionEntries
+        entries={entries}
+        timeZone={timeZone}
+        heading="Recent activity"
+        onViewHistory={onViewHistory}
+        showTemporaryNotice={false}
+      />
 
       <p className="dashboard-temporary">Dashboard totals use drinks saved in this session. Refreshing or closing the app clears entries and preferences.</p>
     </div>
