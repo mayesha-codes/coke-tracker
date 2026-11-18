@@ -7,6 +7,7 @@ import { getCalendarDayPeriod, getCalendarWeekPeriod } from '../../domain/period
 import type { ReportingPeriod } from '../../domain/periods'
 import type { ConsumptionTotals } from '../../domain/totals'
 import type { TrackingSettings } from '../../domain/types'
+import CalorieGlass from './CalorieGlass'
 import RecentSessionEntries from '../logging/RecentSessionEntries'
 import { ENGLISH_DISPLAY_LOCALE } from '../preferences/preferences'
 import './DashboardPage.css'
@@ -276,6 +277,7 @@ function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: Dashb
             <p className="dashboard-overview__note">Sugar and calories use each drink’s saved nutrition snapshot. Calories are estimates from Coke only.</p>
           </section>
 
+          <CalorieGlass volumeMl={summary.totals.volumeMl} kcal={summary.totals.kcal} />
           <DailyGoal result={summary} />
           <SpendingOverview totals={summary.totals} />
         </>

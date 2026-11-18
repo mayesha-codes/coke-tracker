@@ -123,6 +123,24 @@ describe('today dashboard and volume goal', () => {
     expect(Object.isFrozen(includedA.entry.nutrition)).toBe(true)
   })
 
+  it('passes today’s reported volume and saved-snapshot calories to the glass without using the goal', () => {
+    const entry = record('glass-summary', {
+      consumedAt: '2026-11-08T00:00:00.000Z',
+      quantity: 2,
+      servingMl: 330,
+      kcal: 31.5,
+    })
+    renderDashboard(Object.freeze([entry]), { dailyLimitMl: 0 })
+
+    const glass = screen.getByRole('region', { name: "Today's Coke glass" })
+    const metrics = within(glass)
+    expect(metrics.getByText('Consumed today').nextElementSibling?.textContent).toContain('660')
+    expect(metrics.getByText('Estimated Coke-only calories').nextElementSibling?.textContent).toContain('207.9')
+    expect(screen.getByTestId('glass-fill-level').getAttribute('data-fill-percent')).toBe('100')
+    expect(screen.getByText('660 ml over your zero-volume limit.')).toBeDefined()
+    expect(entry.entry.nutrition.kcalPer100Ml).toBe(31.5)
+  })
+
   it.each([
     { name: 'within the limit', limit: 1000, volume: 660, message: '340 ml remaining of 1,000 ml.', progress: 660 },
     { name: 'reached exactly', limit: 660, volume: 660, message: 'Daily volume limit reached at 660 ml.', progress: 660 },
