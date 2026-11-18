@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useId, useLayoutEffect, useState } from 'react'
 import type { SessionEntryRecord } from '../../app/session/sessionState'
 import { calculateDailySummary, calculatePeriodTotals } from '../../domain/reporting'
 import type { DailySummaryResult } from '../../domain/reporting'
@@ -212,22 +212,35 @@ function WeeklyContext({ entries, referenceUtc, timeZone }: {
 }
 
 function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: DashboardPageProps) {
-  const [, setDayRefresh] = useState(0)
-  const referenceUtc = new Date().toISOString()
+  const [referenceUtc, setReferenceUtc] = useState<string | null>(null)
   const summaryId = useId()
   const drinkEntries = entries.map(record => record.entry)
-  const summary = calculateDailySummary(drinkEntries, referenceUtc, dailyLimitMl, timeZone)
+  const summary = referenceUtc === null
+    ? null
+    : calculateDailySummary(drinkEntries, referenceUtc, dailyLimitMl, timeZone)
 
-  // Refresh once at the next reporting-day boundary. The domain period supplies
-  // the timezone-aware instant, including DST changes; cleanup handles navigation.
-  useEffect(() => {
-    const day = getCalendarDayPeriod(referenceUtc, timeZone)
-    if (day.valid === false) return
+  // Read the clock after commit, then refresh at the next timezone-aware day
+  // boundary. StrictMode cleanup cancels its first setup before starting again.
+  useLayoutEffect(() => {
+    let timeout: number | undefined
 
-    const delay = Math.max(1, Date.parse(day.period.endUtc) - Date.now() + 1)
-    const timeout = window.setTimeout(() => setDayRefresh(value => value + 1), delay)
-    return () => window.clearTimeout(timeout)
-  }, [referenceUtc, timeZone])
+    function refreshAtReportingMidnight() {
+      const now = new Date()
+      const currentUtc = now.toISOString()
+      setReferenceUtc(currentUtc)
+
+      const day = getCalendarDayPeriod(currentUtc, timeZone)
+      if (day.valid === false) return
+
+      const delay = Math.max(1, Date.parse(day.period.endUtc) - now.getTime() + 1)
+      timeout = window.setTimeout(refreshAtReportingMidnight, delay)
+    }
+
+    refreshAtReportingMidnight()
+    return () => {
+      if (timeout !== undefined) window.clearTimeout(timeout)
+    }
+  }, [timeZone])
 
   return (
     <div className="dashboard-page">
@@ -235,16 +248,16 @@ function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: Dashb
         <div>
           <p className="dashboard-eyebrow">Your daily reset · {timeZone}</p>
           <h1 id="view-heading">Today<span aria-hidden="true">.</span></h1>
-          <p>{formatToday(referenceUtc, timeZone)}</p>
+          {referenceUtc !== null && <p>{formatToday(referenceUtc, timeZone)}</p>}
         </div>
-        {summary.valid && (
+        {summary?.valid && (
           <span className="dashboard-heading__entries">
             {summary.totals.entryCount} {summary.totals.entryCount === 1 ? 'entry' : 'entries'} · {summary.totals.drinkCount} {summary.totals.drinkCount === 1 ? 'drink' : 'drinks'}
           </span>
         )}
       </header>
 
-      {summary.valid ? (
+      {summary?.valid ? (
         <>
           <section className="dashboard-overview" aria-labelledby={summaryId}>
             <div className="dashboard-overview__heading">
@@ -265,13 +278,16 @@ function DashboardPage({ entries, timeZone, dailyLimitMl, onViewHistory }: Dashb
 
           <DailyGoal result={summary} />
           <SpendingOverview totals={summary.totals} />
-          <WeeklyContext entries={entries} referenceUtc={referenceUtc} timeZone={timeZone} />
         </>
-      ) : (
+      ) : summary?.valid === false ? (
         <section className="dashboard-error" role="alert" aria-label="Today's summary unavailable">
           <h2>Today's summary is unavailable</h2>
           <p>{summary.issues.map(issue => issue.message).join(' ')}</p>
         </section>
+      ) : null}
+
+      {summary?.valid && referenceUtc !== null && (
+        <WeeklyContext entries={entries} referenceUtc={referenceUtc} timeZone={timeZone} />
       )}
 
       <RecentSessionEntries

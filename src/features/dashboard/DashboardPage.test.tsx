@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { createDrinkEntry } from '../../domain/entries'
@@ -253,6 +254,7 @@ describe('weekly dashboard context', () => {
     expect(within(weeklyRegion()).getByText('Nov 2, 2026 – Nov 8, 2026')).toBeDefined()
     expect(weeklyMetric('Drinks this week')).toBe('2')
     expect(metric('Drinks')).toBe('2')
+    expect(vi.getTimerCount()).toBe(1)
     view.rerender(<DashboardPage
       entries={entries}
       timeZone="UTC"
@@ -264,6 +266,7 @@ describe('weekly dashboard context', () => {
     // Tokyo's Monday began before this instant; UTC's Monday begins after it.
     expect(weeklyMetric('Drinks this week')).toBe('0')
     expect(metric('Drinks')).toBe('0')
+    expect(vi.getTimerCount()).toBe(1)
     expect(entries).toEqual(original)
     expect(entry.entry.consumedAt).toBe('2026-11-01T20:00:00.000Z')
     expect(Object.isFrozen(entry.entry.nutrition)).toBe(true)
@@ -286,6 +289,20 @@ describe('weekly dashboard context', () => {
     expect(screen.getByText('Monday, November 9')).toBeDefined()
     expect(metric('Drinks')).toBe('0')
     expect(weeklyMetric('Drinks this week')).toBe('0')
+    view.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps exactly one midnight timer under StrictMode and removes it on unmount', () => {
+    const view = render(<StrictMode><DashboardPage
+      entries={Object.freeze([])}
+      timeZone="Asia/Tokyo"
+      dailyLimitMl={null}
+      onViewHistory={vi.fn()}
+    /></StrictMode>)
+
+    expect(screen.getByText('Sunday, November 8')).toBeDefined()
+    expect(vi.getTimerCount()).toBe(1)
     view.unmount()
     expect(vi.getTimerCount()).toBe(0)
   })
